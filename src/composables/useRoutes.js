@@ -102,6 +102,31 @@ export function useRoutes() {
       console.log("No valid route found.");
     }
   };
+  const drawCalculatedRoute = async (mapInstance, coordinates) => {
+    if (!mapInstance || !coordinates || coordinates.length === 0) return;
 
-  return { loadRoutes, findBestRoute };
+    try {
+      const response = await orsDirections.calculate({
+        coordinates: coordinates,
+        profile: "driving-car",
+        format: "geojson",
+      });
+
+      const routedCoords = response.features[0].geometry.coordinates;
+      const latlngs = routedCoords.map((coord) => [coord[1], coord[0]]);
+
+      const polyline = L.polyline(latlngs, {
+        color: "blue",
+        weight: 4,
+        opacity: 0.5,
+      }).addTo(mapInstance);
+      mapInstance.fitBounds(polyline.getBounds());
+
+      return polyline;
+    } catch (error) {
+      console.error("Error calculating route:", error);
+    }
+  };
+
+  return { loadRoutes, findBestRoute, drawCalculatedRoute };
 }
