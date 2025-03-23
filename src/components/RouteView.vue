@@ -1,6 +1,6 @@
 <script setup>
 import { ref, computed } from "vue";
-import MapPreview from "@/components/MapPreview.vue";
+// import MapPreview from "@/components/MapPreview.vue";
 import { useRoutesStore } from "@/stores/routeStore";
 import routesData from "@/data/routesData.json";
 
@@ -54,9 +54,7 @@ const getRouteDetails = (routeName) => {
               <v-card-text>
                 <p>
                   <strong>Distance:</strong>
-                  {{
-                    getRouteDetails(route.name).orsDistance?.toFixed(2)
-                  }}
+                  {{ getRouteDetails(route.name).orsDistance?.toFixed(2) }}
                   meters
                 </p>
                 <!-- Map Preview using the coordinates from the store -->

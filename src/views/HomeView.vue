@@ -1,7 +1,7 @@
 <script setup>
 import { ref } from "vue";
 import Map from "@/components/Map.vue";
-import RouteInput from "@/components/RouteInput.vue";
+
 import { useRoutes } from "@/composables/useRoutes";
 import LogoPage from "@/components/LogoPage.vue";
 import Navbar from "@/components/Navbar.vue";

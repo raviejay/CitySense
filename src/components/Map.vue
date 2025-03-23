@@ -3,9 +3,10 @@ import { ref, onMounted, defineEmits } from "vue";
 import L from "leaflet";
 import "leaflet/dist/leaflet.css";
 import { useRoutes } from "@/composables/useRoutes";
+import { useMapStore } from "@/stores/mapStore";
 
+const mapStore = useMapStore();
 const mapContainer = ref(null);
-const mapInstance = ref(null);
 const clickCount = ref(0);
 const startCoords = ref("");
 const destinationCoords = ref("");
@@ -15,13 +16,16 @@ const { loadRoutes } = useRoutes();
 
 // Initialize the map
 onMounted(() => {
-  mapInstance.value = L.map(mapContainer.value).setView([8.9464, 125.4792], 14);
+  const map = L.map(mapContainer.value).setView([8.9464, 125.4792], 14);
   L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
     attribution: "&copy; OpenStreetMap contributors",
-  }).addTo(mapInstance.value);
+  }).addTo(map);
 
-  loadRoutes(mapInstance.value);
-  mapInstance.value.on("click", onMapClick);
+  // Store map in Pinia
+  mapStore.setMapInstance(map);
+
+  loadRoutes(map);
+  map.on("click", onMapClick);
 });
 
 // Handle map clicks to set start/destination

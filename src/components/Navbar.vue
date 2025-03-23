@@ -1,6 +1,6 @@
 <script setup>
 import { ref } from "vue";
-import SearchView from "@/components/SearchView.vue";
+
 import RouteView from "@/components/RouteView.vue";
 import SettingsView from "@/components/SettingsView.vue";
 import Searchs from "./Searchs.vue";
