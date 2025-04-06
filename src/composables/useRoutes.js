@@ -5,11 +5,16 @@ import { useRoutesStore } from "@/stores/routeStore";
 import precalculatedRoutes from "@/data/precalculatedRoutes.json";
 import precalculatedTricycleRoutes from "@/data/precalculatedTricycleRoutes.json";
 
-const ORS_API_KEY = "5b3ce3597851110001cf62489cfc14e709f446268359f1fe73a6dc38";
+const ORS_API_KEY = "5b3ce3597851110001cf62481cc8343cfad84cc5960086b346336c5e";
 const orsDirections = new Ors.Directions({ api_key: ORS_API_KEY });
 
 // Maximum transfer distance between routes in meters (300m)
 const MAX_TRANSFER_DISTANCE = 300;
+
+// PUJ Fare constants
+const PUJ_BASE_FARE = 13.0; // Base fare for first 4km
+const PUJ_BASE_DISTANCE = 4000; // Base distance in meters (4km)
+const PUJ_ADDITIONAL_FARE_PER_KM = 1.75; // Additional fare per km
 
 export function useRoutes() {
   const store = useRoutesStore();
@@ -58,7 +63,7 @@ export function useRoutes() {
 
         route.polyline = L.polyline(
           coordsToUse.map((coord) => [coord[1], coord[0]]),
-          { color: routeColor, weight: 4, opacity: 0.5 }
+          { color: routeColor, weight: 4, opacity: 0 }
         ).addTo(mapInstance);
       } catch (error) {
         console.error(`Error loading route ${route.name}:`, error);
@@ -68,6 +73,23 @@ export function useRoutes() {
     // Save routes in Pinia store
     store.setRoutes(allRoutes);
     console.log("All routes loaded and saved in store:", store.getRoutes());
+  };
+
+  // Calculate PUJ fare based on distance
+  const calculatePUJFare = (distanceInMeters) => {
+    if (distanceInMeters <= PUJ_BASE_DISTANCE) {
+      // If distance is within base distance (4km), return base fare
+      return PUJ_BASE_FARE;
+    } else {
+      // Calculate additional distance beyond base in kilometers
+      const additionalDistanceKm =
+        (distanceInMeters - PUJ_BASE_DISTANCE) / 1000;
+      // Calculate additional fare
+      const additionalFare =
+        Math.ceil(additionalDistanceKm) * PUJ_ADDITIONAL_FARE_PER_KM;
+      // Return total fare (base + additional)
+      return PUJ_BASE_FARE + additionalFare;
+    }
   };
 
   const calculateDistance = (point1, point2) => {
@@ -153,7 +175,7 @@ export function useRoutes() {
     return { point: nearestPoint, distance: minDistance, segmentIndex };
   };
 
-  // Enhanced method to compute distance along a route from one point to another
+  // Calculate distance along a route from one point to another
   const calculateDistanceAlongRoute = (route, startIndex, endIndex) => {
     const useCoords = route.routedCoordinates || route.coordinates;
     let totalDistance = 0;
@@ -177,7 +199,7 @@ export function useRoutes() {
     return totalDistance;
   };
 
-  // Enhanced method to find valid transfer points between routes
+  // Find valid transfer points between routes
   const findTransferPoints = (route1, route2, maxResults = 3) => {
     const transferCandidates = [];
     const coords1 = route1.routedCoordinates || route1.coordinates;
@@ -238,17 +260,122 @@ export function useRoutes() {
     return filteredCandidates;
   };
 
-  // Improved algorithm for finding best route combinations
-  const findBestRouteCombination = (startCoords, endCoords, mapInstance) => {
+  // NEW A* PATHFINDING IMPLEMENTATION
+  /**
+   * A* (A-Star) Algorithm implementation for finding optimal public transport routes
+   *
+   * This algorithm finds the shortest path in a weighted graph, using a heuristic
+   * to guide the search more efficiently. It's well-suited for transportation routing.
+   *
+   * Reference: Hart, P. E., Nilsson, N. J., & Raphael, B. (1968). A Formal Basis for the
+   * Heuristic Determination of Minimum Cost Paths. IEEE Transactions on Systems Science
+   * and Cybernetics, 4(2), 100-107.
+   */
+  const findBestRouteWithAStar = (startCoords, endCoords, mapInstance) => {
     console.log(
-      "Finding best route combination from:",
+      "Finding best route using A* algorithm from:",
       startCoords,
       "to:",
       endCoords
     );
 
     const allRoutes = store.getRoutes();
+
+    // Build the transport graph
+    const graph = buildTransportGraph(startCoords, endCoords, allRoutes);
+
+    if (!graph.startNodes.length || !graph.endNodes.length) {
+      console.error("No valid routes found near start or end points");
+      return { bestRoute: null, allOptions: [] };
+    }
+
+    console.log(
+      `Found ${graph.startNodes.length} start points and ${graph.endNodes.length} end points`
+    );
+
+    // Run A* algorithm for each start-end pair and keep the best routes
     const possibleRoutes = [];
+
+    for (const startNode of graph.startNodes) {
+      for (const endNode of graph.endNodes) {
+        const route = aStarSearch(graph, startNode, endNode, endCoords);
+        if (route) {
+          possibleRoutes.push(route);
+        }
+      }
+    }
+
+    // Sort routes by a combination of factors (same as before)
+    possibleRoutes.sort((a, b) => {
+      // First prioritize by number of transfers
+      const aTransfers = a.steps.length - 1;
+      const bTransfers = b.steps.length - 1;
+
+      if (aTransfers !== bTransfers) {
+        return aTransfers - bTransfers; // Prefer fewer transfers
+      }
+
+      // Create a composite score
+      const getFareScore = (route) => route.totalFare / 50;
+      const getDistanceScore = (route) => route.totalDistance / 5000;
+      const getTransferScore = (route) => {
+        if (route.transferDistances && route.transferDistances.length > 0) {
+          return (
+            route.transferDistances.reduce((sum, dist) => sum + dist, 0) /
+            (MAX_TRANSFER_DISTANCE * route.transferDistances.length)
+          );
+        }
+        return 0;
+      };
+
+      const aScore =
+        0.3 * getFareScore(a) +
+        0.4 * getDistanceScore(a) +
+        0.3 * getTransferScore(a);
+      const bScore =
+        0.3 * getFareScore(b) +
+        0.4 * getDistanceScore(b) +
+        0.3 * getTransferScore(b);
+
+      return aScore - bScore;
+    });
+
+    // Select the best routes
+    const bestRoutes = possibleRoutes.slice(
+      0,
+      Math.min(3, possibleRoutes.length)
+    );
+    const bestRoute = bestRoutes.length > 0 ? bestRoutes[0] : null;
+
+    if (bestRoute) {
+      console.log("Best route found with A*:", bestRoute);
+      visualizeRouteCombination(bestRoute, allRoutes, mapInstance);
+
+      console.log(
+        `Found ${possibleRoutes.length} possible routes using A*. Top options:`,
+        bestRoutes
+      );
+    } else {
+      console.log("No valid routes found with A*.");
+    }
+
+    return {
+      bestRoute,
+      allOptions: bestRoutes,
+    };
+  };
+
+  /**
+   * Builds a transportation network graph for A* algorithm
+   * Nodes are points on routes, edges are connections between these points
+   */
+  const buildTransportGraph = (startCoords, endCoords, allRoutes) => {
+    const graph = {
+      nodes: [],
+      edges: {},
+      startNodes: [],
+      endNodes: [],
+    };
 
     // Find nearest points on all routes for start and end
     const startRoutePoints = allRoutes
@@ -277,336 +404,716 @@ export function useRoutes() {
       })
       .filter((item) => item.proximity.distance <= MAX_TRANSFER_DISTANCE);
 
-    console.log(
-      `Found ${startRoutePoints.length} possible start routes and ${endRoutePoints.length} possible end routes`
-    );
+    // Create nodes for each route
+    allRoutes.forEach((route) => {
+      const useCoords = route.routedCoordinates || route.coordinates;
 
-    // OPTION 1: Direct single route (if start and end are on the same route)
+      // Create nodes for key points on each route (start, end, and some intermediate points)
+      // We don't need a node for every coordinate to keep the graph manageable
+      const samplingRate = Math.max(1, Math.floor(useCoords.length / 20)); // Sample ~10 points
+
+      for (let i = 0; i < useCoords.length; i += samplingRate) {
+        const nodeId = `${route.name}_${i}`;
+        const point = useCoords[i];
+
+        graph.nodes.push({
+          id: nodeId,
+          routeName: route.name,
+          routeType: route.type,
+          point: point,
+          segmentIndex: i,
+        });
+
+        // Initialize empty adjacency list
+        graph.edges[nodeId] = [];
+
+        // If not the first node, connect to previous node on this route
+        if (i > 0) {
+          const prevNodeId = `${route.name}_${i - samplingRate}`;
+          const distance = calculateDistanceAlongRoute(
+            route,
+            i - samplingRate,
+            i
+          );
+
+          let fare;
+          if (route.type === "PUJ") {
+            fare = calculatePUJFare(distance);
+          } else {
+            fare = route.fare; // Fixed fare for tricycle
+          }
+
+          // Add edge in both directions (bidirectional graph)
+          graph.edges[prevNodeId].push({
+            to: nodeId,
+            routeName: route.name,
+            routeType: route.type,
+            distance: distance,
+            fare: fare,
+            transferDistance: 0,
+            isTransfer: false,
+          });
+
+          graph.edges[nodeId].push({
+            to: prevNodeId,
+            routeName: route.name,
+            routeType: route.type,
+            distance: distance,
+            fare: fare,
+            transferDistance: 0,
+            isTransfer: false,
+          });
+        }
+      }
+    });
+
+    // Add special nodes for start and end positions
     startRoutePoints.forEach((startPoint) => {
-      endRoutePoints.forEach((endPoint) => {
-        if (startPoint.route.name === endPoint.route.name) {
-          const useCoords =
-            startPoint.route.routedCoordinates || startPoint.route.coordinates;
+      const useCoords =
+        startPoint.route.routedCoordinates || startPoint.route.coordinates;
+      const nodeId = `start_${startPoint.route.name}_${startPoint.proximity.segmentIndex}`;
+      const point = startPoint.proximity.point;
 
-          // Calculate actual distance along route between start and end points
-          const distanceAlongRoute = calculateDistanceAlongRoute(
+      graph.nodes.push({
+        id: nodeId,
+        routeName: startPoint.route.name,
+        routeType: startPoint.route.type,
+        point: point,
+        segmentIndex: startPoint.proximity.segmentIndex,
+        isStartPoint: true,
+      });
+
+      graph.edges[nodeId] = [];
+      graph.startNodes.push(nodeId);
+
+      // Connect to nearby nodes on the same route
+      graph.nodes.forEach((node) => {
+        if (
+          node.routeName === startPoint.route.name &&
+          !node.isStartPoint &&
+          !node.isEndPoint
+        ) {
+          const distance = calculateDistanceAlongRoute(
             startPoint.route,
             startPoint.proximity.segmentIndex,
+            node.segmentIndex
+          );
+
+          let fare;
+          if (startPoint.route.type === "PUJ") {
+            fare = calculatePUJFare(distance);
+          } else {
+            fare = startPoint.route.fare;
+          }
+
+          graph.edges[nodeId].push({
+            to: node.id,
+            routeName: startPoint.route.name,
+            routeType: startPoint.route.type,
+            distance: distance,
+            fare: fare,
+            transferDistance: 0,
+            isTransfer: false,
+          });
+        }
+      });
+    });
+
+    endRoutePoints.forEach((endPoint) => {
+      const useCoords =
+        endPoint.route.routedCoordinates || endPoint.route.coordinates;
+      const nodeId = `end_${endPoint.route.name}_${endPoint.proximity.segmentIndex}`;
+      const point = endPoint.proximity.point;
+
+      graph.nodes.push({
+        id: nodeId,
+        routeName: endPoint.route.name,
+        routeType: endPoint.route.type,
+        point: point,
+        segmentIndex: endPoint.proximity.segmentIndex,
+        isEndPoint: true,
+      });
+
+      graph.edges[nodeId] = [];
+      graph.endNodes.push(nodeId);
+
+      // Connect from nearby nodes on the same route to this end node
+      graph.nodes.forEach((node) => {
+        if (
+          node.routeName === endPoint.route.name &&
+          !node.isStartPoint &&
+          !node.isEndPoint
+        ) {
+          const distance = calculateDistanceAlongRoute(
+            endPoint.route,
+            node.segmentIndex,
             endPoint.proximity.segmentIndex
           );
 
-          // Calculate percentage of total route distance
-          const routePercentage =
-            distanceAlongRoute / startPoint.route.orsDistance;
-
-          // Calculate prorated fare based on distance traveled
-          const proratedFare = Math.max(
-            startPoint.route.fare * 0.5, // Minimum fare is 50% of full fare
-            startPoint.route.fare * routePercentage
-          );
-
-          possibleRoutes.push({
-            type: "direct",
-            steps: [
-              {
-                mode: startPoint.route.type,
-                routeName: startPoint.route.name,
-                start: startPoint.proximity.point,
-                end: endPoint.proximity.point,
-                segmentStart: startPoint.proximity.segmentIndex,
-                segmentEnd: endPoint.proximity.segmentIndex,
-                distance: distanceAlongRoute,
-                fare: Math.round(proratedFare),
-                description: startPoint.route.description,
-              },
-            ],
-            totalDistance: distanceAlongRoute,
-            totalFare: Math.round(proratedFare),
-          });
-        }
-      });
-    });
-
-    // OPTION 2: Two-route combinations (with transfer)
-    startRoutePoints.forEach((startPoint) => {
-      endRoutePoints.forEach((endPoint) => {
-        // Skip if same route (already handled in Option 1)
-        if (startPoint.route.name === endPoint.route.name) return;
-
-        // Find potential transfer points between these routes
-        const transferPoints = findTransferPoints(
-          startPoint.route,
-          endPoint.route
-        );
-
-        if (transferPoints.length > 0) {
-          transferPoints.forEach((transferPoint) => {
-            // Calculate distance along first route
-            const distance1 = calculateDistanceAlongRoute(
-              startPoint.route,
-              startPoint.proximity.segmentIndex,
-              transferPoint.index1
-            );
-
-            // Calculate distance along second route
-            const distance2 = calculateDistanceAlongRoute(
-              endPoint.route,
-              transferPoint.index2,
-              endPoint.proximity.segmentIndex
-            );
-
-            // Calculate prorated fares
-            const fare1 = Math.max(
-              startPoint.route.fare * 0.5,
-              startPoint.route.fare * (distance1 / startPoint.route.orsDistance)
-            );
-
-            const fare2 = Math.max(
-              endPoint.route.fare * 0.5,
-              endPoint.route.fare * (distance2 / endPoint.route.orsDistance)
-            );
-
-            possibleRoutes.push({
-              type: "combined",
-              steps: [
-                {
-                  mode: startPoint.route.type,
-                  routeName: startPoint.route.name,
-                  start: startPoint.proximity.point,
-                  end: transferPoint.point1,
-                  segmentStart: startPoint.proximity.segmentIndex,
-                  segmentEnd: transferPoint.index1,
-                  distance: distance1,
-                  fare: Math.round(fare1),
-                  description: startPoint.route.description,
-                },
-                {
-                  mode: endPoint.route.type,
-                  routeName: endPoint.route.name,
-                  start: transferPoint.point2,
-                  end: endPoint.proximity.point,
-                  segmentStart: transferPoint.index2,
-                  segmentEnd: endPoint.proximity.segmentIndex,
-                  distance: distance2,
-                  fare: Math.round(fare2),
-                  description: endPoint.route.description,
-                },
-              ],
-              totalDistance: distance1 + distance2 + transferPoint.distance,
-              totalFare: Math.round(fare1 + fare2),
-              transferPoint,
-              transferDistance: transferPoint.distance,
-            });
-          });
-        }
-      });
-    });
-
-    // OPTION 3: Three routes (with 2 transfers)
-    // Only try this if we have very few options so far
-    if (possibleRoutes.length < 3) {
-      allRoutes.forEach((middleRoute) => {
-        startRoutePoints.forEach((startPoint) => {
-          // Skip if middle route is the same as start route
-          if (middleRoute.name === startPoint.route.name) return;
-
-          // Find transfer points from start route to middle route
-          const transferPoints1 = findTransferPoints(
-            startPoint.route,
-            middleRoute
-          );
-
-          if (transferPoints1.length > 0) {
-            endRoutePoints.forEach((endPoint) => {
-              // Skip if middle route is the same as end route or start route is the same as end route
-              if (
-                middleRoute.name === endPoint.route.name ||
-                startPoint.route.name === endPoint.route.name
-              )
-                return;
-
-              // Find transfer points from middle route to end route
-              const transferPoints2 = findTransferPoints(
-                middleRoute,
-                endPoint.route
-              );
-
-              if (transferPoints2.length > 0) {
-                // Try all reasonable combinations of transfer points
-                transferPoints1.slice(0, 1).forEach((transfer1) => {
-                  transferPoints2.slice(0, 1).forEach((transfer2) => {
-                    // Skip if transfer2 is before transfer1 on middle route (wrong direction)
-                    if (transfer2.index1 < transfer1.index2) return;
-
-                    // Calculate distances along each route segment
-                    const distance1 = calculateDistanceAlongRoute(
-                      startPoint.route,
-                      startPoint.proximity.segmentIndex,
-                      transfer1.index1
-                    );
-
-                    const distance2 = calculateDistanceAlongRoute(
-                      middleRoute,
-                      transfer1.index2,
-                      transfer2.index1
-                    );
-
-                    const distance3 = calculateDistanceAlongRoute(
-                      endPoint.route,
-                      transfer2.index2,
-                      endPoint.proximity.segmentIndex
-                    );
-
-                    // Calculate prorated fares
-                    const fare1 = Math.max(
-                      startPoint.route.fare * 0.5,
-                      startPoint.route.fare *
-                        (distance1 / startPoint.route.orsDistance)
-                    );
-
-                    const fare2 = Math.max(
-                      middleRoute.fare * 0.5,
-                      middleRoute.fare * (distance2 / middleRoute.orsDistance)
-                    );
-
-                    const fare3 = Math.max(
-                      endPoint.route.fare * 0.5,
-                      endPoint.route.fare *
-                        (distance3 / endPoint.route.orsDistance)
-                    );
-
-                    possibleRoutes.push({
-                      type: "triple",
-                      steps: [
-                        {
-                          mode: startPoint.route.type,
-                          routeName: startPoint.route.name,
-                          start: startPoint.proximity.point,
-                          end: transfer1.point1,
-                          segmentStart: startPoint.proximity.segmentIndex,
-                          segmentEnd: transfer1.index1,
-                          distance: distance1,
-                          fare: Math.round(fare1),
-                          description: startPoint.route.description,
-                        },
-                        {
-                          mode: middleRoute.type,
-                          routeName: middleRoute.name,
-                          start: transfer1.point2,
-                          end: transfer2.point1,
-                          segmentStart: transfer1.index2,
-                          segmentEnd: transfer2.index1,
-                          distance: distance2,
-                          fare: Math.round(fare2),
-                          description: middleRoute.description,
-                        },
-                        {
-                          mode: endPoint.route.type,
-                          routeName: endPoint.route.name,
-                          start: transfer2.point2,
-                          end: endPoint.proximity.point,
-                          segmentStart: transfer2.index2,
-                          segmentEnd: endPoint.proximity.segmentIndex,
-                          distance: distance3,
-                          fare: Math.round(fare3),
-                          description: endPoint.route.description,
-                        },
-                      ],
-                      totalDistance:
-                        distance1 +
-                        distance2 +
-                        distance3 +
-                        transfer1.distance +
-                        transfer2.distance,
-                      totalFare: Math.round(fare1 + fare2 + fare3),
-                      transferPoints: [transfer1, transfer2],
-                      transferDistances: [
-                        transfer1.distance,
-                        transfer2.distance,
-                      ],
-                    });
-                  });
-                });
-              }
-            });
+          let fare;
+          if (endPoint.route.type === "PUJ") {
+            fare = calculatePUJFare(distance);
+          } else {
+            fare = endPoint.route.fare;
           }
-        });
+
+          graph.edges[node.id].push({
+            to: nodeId,
+            routeName: endPoint.route.name,
+            routeType: endPoint.route.type,
+            distance: distance,
+            fare: fare,
+            transferDistance: 0,
+            isTransfer: false,
+          });
+        }
       });
+    });
+
+    // Add transfer edges between different routes (where applicable)
+    for (let i = 0; i < graph.nodes.length; i++) {
+      const nodeA = graph.nodes[i];
+      // Skip start and end nodes for transfers
+      if (nodeA.isStartPoint || nodeA.isEndPoint) continue;
+
+      for (let j = i + 1; j < graph.nodes.length; j++) {
+        const nodeB = graph.nodes[j];
+        // Skip nodes on the same route or start/end nodes
+        if (
+          nodeA.routeName === nodeB.routeName ||
+          nodeB.isStartPoint ||
+          nodeB.isEndPoint
+        )
+          continue;
+
+        // Calculate transfer distance
+        const transferDistance = calculateDistance(nodeA.point, nodeB.point);
+
+        // Only add transfer if within maximum transfer distance
+        if (transferDistance <= MAX_TRANSFER_DISTANCE) {
+          // Add bidirectional transfer edges
+          graph.edges[nodeA.id].push({
+            to: nodeB.id,
+            routeName: "transfer",
+            routeType: "walking",
+            distance: 0, // Route distance is 0, we track transfer distance separately
+            fare: 0, // No fare for walking transfers
+            transferDistance: transferDistance,
+            isTransfer: true,
+          });
+
+          graph.edges[nodeB.id].push({
+            to: nodeA.id,
+            routeName: "transfer",
+            routeType: "walking",
+            distance: 0,
+            fare: 0,
+            transferDistance: transferDistance,
+            isTransfer: true,
+          });
+        }
+      }
     }
 
-    // Sort routes by a combination of factors
-    possibleRoutes.sort((a, b) => {
-      // First prioritize by number of transfers
-      const aTransfers =
-        a.type === "direct" ? 0 : a.type === "combined" ? 1 : 2;
-      const bTransfers =
-        b.type === "direct" ? 0 : b.type === "combined" ? 1 : 2;
+    return graph;
+  };
 
-      if (aTransfers !== bTransfers) {
-        return aTransfers - bTransfers; // Prefer fewer transfers
+  /**
+   * A* search algorithm implementation
+   * g(n) = cost from start to node n
+   * h(n) = estimated cost from node n to goal
+   * f(n) = g(n) + h(n)
+   */
+  const aStarSearch = (graph, startNodeId, endNodeId, endCoords) => {
+    // Nodes we've seen but not fully explored
+    const openSet = new Set([startNodeId]);
+
+    // Nodes we've fully explored
+    const closedSet = new Set();
+
+    // For each node, which node it came from in the optimal path
+    const cameFrom = {};
+
+    // For each node, the cost of getting from the start node to that node
+    const gScore = {};
+    graph.nodes.forEach((node) => {
+      gScore[node.id] = Infinity;
+    });
+    gScore[startNodeId] = 0;
+
+    // For each node, the estimated total cost from start to goal through that node
+    const fScore = {};
+    graph.nodes.forEach((node) => {
+      fScore[node.id] = Infinity;
+    });
+
+    // Set initial fScore for start node using heuristic
+    const startNode = graph.nodes.find((node) => node.id === startNodeId);
+    fScore[startNodeId] = heuristic(startNode.point, endCoords);
+
+    // Track the edges used in the path
+    const edgeUsed = {};
+
+    // Maximum number of transfers allowed
+    const MAX_TRANSFERS = 2;
+
+    // Track number of transfers used to reach each node
+    const transferCount = {};
+    graph.nodes.forEach((node) => {
+      transferCount[node.id] = 0;
+    });
+
+    // Main A* algorithm loop
+    while (openSet.size > 0) {
+      // Find node in openSet with lowest fScore
+      let current = null;
+      let lowestFScore = Infinity;
+
+      for (const nodeId of openSet) {
+        if (fScore[nodeId] < lowestFScore) {
+          lowestFScore = fScore[nodeId];
+          current = nodeId;
+        }
       }
 
-      // Create a composite score that considers:
-      // - Fare (30% weight)
-      // - Distance (40% weight)
-      // - Transfer distance if applicable (30% weight)
+      // If we've reached our goal, reconstruct path
+      if (current === endNodeId) {
+        return reconstructRoute(graph, cameFrom, edgeUsed, current);
+      }
 
-      const getFareScore = (route) => route.totalFare / 50; // Normalize fare (assuming max ~50)
-      const getDistanceScore = (route) => route.totalDistance / 5000; // Normalize distance (assuming max ~5km)
+      // Remove current node from openSet and add to closedSet
+      openSet.delete(current);
+      closedSet.add(current);
 
-      // For transfer distance, use actual transfer distance or 0 for direct routes
-      const getTransferScore = (route) => {
-        if (route.type === "direct") return 0;
-        if (route.type === "combined")
-          return route.transferDistance / MAX_TRANSFER_DISTANCE;
-        if (route.type === "triple") {
-          return (
-            (route.transferDistances[0] + route.transferDistances[1]) /
-            (MAX_TRANSFER_DISTANCE * 2)
-          );
+      // Check each neighboring node
+      for (const edge of graph.edges[current]) {
+        const neighbor = edge.to;
+
+        // Skip if already evaluated
+        if (closedSet.has(neighbor)) continue;
+
+        // Skip if adding this edge would exceed maximum transfer count
+        const currentTransfers = transferCount[current];
+        const newTransfers = currentTransfers + (edge.isTransfer ? 1 : 0);
+        if (newTransfers > MAX_TRANSFERS) continue;
+
+        // Calculate tentative gScore
+        // We use a weighted combination of distance, fare, and transfer penalties
+        const distance = edge.distance;
+        const fare = edge.fare;
+        const transferDistance = edge.transferDistance;
+
+        // Weight factors (can be adjusted based on user preferences)
+        const DISTANCE_WEIGHT = 0.4;
+        const FARE_WEIGHT = 0.3;
+        const TRANSFER_WEIGHT = 0.3;
+        const TRANSFER_PENALTY = 0.5;
+
+        // Normalize scores
+        const normalizedDistance = distance / 5000; // Normalized to 5km
+        const normalizedFare = fare / 50; // Normalized to 50 units
+        const normalizedTransfer = transferDistance / MAX_TRANSFER_DISTANCE;
+
+        const edgeCost =
+          DISTANCE_WEIGHT * normalizedDistance +
+          FARE_WEIGHT * normalizedFare +
+          TRANSFER_WEIGHT * normalizedTransfer +
+          (edge.isTransfer ? TRANSFER_PENALTY : 0);
+
+        const tentativeGScore = gScore[current] + edgeCost;
+
+        // If this path is better than any previous one, record it
+        if (tentativeGScore < gScore[neighbor]) {
+          cameFrom[neighbor] = current;
+          edgeUsed[neighbor] = edge;
+          gScore[neighbor] = tentativeGScore;
+
+          // Update transfer count
+          transferCount[neighbor] = newTransfers;
+
+          // Calculate fScore = gScore + heuristic
+          const neighborNode = graph.nodes.find((node) => node.id === neighbor);
+          fScore[neighbor] =
+            gScore[neighbor] + heuristic(neighborNode.point, endCoords);
+
+          // Add to openSet if not already there
+          openSet.add(neighbor);
         }
-        return 0;
-      };
-
-      const aScore =
-        0.3 * getFareScore(a) +
-        0.4 * getDistanceScore(a) +
-        0.3 * getTransferScore(a);
-      const bScore =
-        0.3 * getFareScore(b) +
-        0.4 * getDistanceScore(b) +
-        0.3 * getTransferScore(b);
-
-      return aScore - bScore;
-    });
-
-    // Select the best routes
-    const bestRoutes = possibleRoutes.slice(
-      0,
-      Math.min(3, possibleRoutes.length)
-    );
-    const bestRoute = bestRoutes.length > 0 ? bestRoutes[0] : null;
-
-    if (bestRoute) {
-      console.log("Best route found:", bestRoute);
-      visualizeRouteCombination(bestRoute, allRoutes, mapInstance);
-
-      // Log all options for debugging
-      console.log(
-        `Found ${possibleRoutes.length} possible routes. Top options:`,
-        bestRoutes
-      );
-    } else {
-      console.log("No valid routes found.");
+      }
     }
 
+    // No path found
+    return null;
+  };
+
+  /**
+   * Heuristic function for A* - estimates distance to goal
+   * Using Haversine distance for geographical coordinates
+   */
+  const heuristic = (point, goalCoords) => {
+    return calculateDistance(point, goalCoords) / 5000; // Normalize to 5km
+  };
+
+  /**
+   * Reconstructs the route from A* result
+   */
+  const reconstructRoute = (graph, cameFrom, edgeUsed, endNodeId) => {
+    // The full path from end to start (reversed)
+    const path = [endNodeId];
+    let current = endNodeId;
+
+    // Steps array for the final route
+    const steps = [];
+    let totalDistance = 0;
+    let totalFare = 0;
+    const transferDistances = [];
+
+    // Reconstruct the path by following cameFrom
+    while (cameFrom[current]) {
+      const edge = edgeUsed[current];
+
+      if (edge.isTransfer) {
+        // Handle transfers
+        transferDistances.push(edge.transferDistance);
+      } else {
+        // Handle regular route segments
+        const fromNode = graph.nodes.find(
+          (node) => node.id === cameFrom[current]
+        );
+        const toNode = graph.nodes.find((node) => node.id === current);
+
+        // Check if we should add a new step or extend the current one
+        const lastStep = steps.length > 0 ? steps[steps.length - 1] : null;
+
+        if (lastStep && lastStep.routeName === edge.routeName) {
+          // Extend existing step - only add the incremental distance
+          lastStep.end = toNode.point;
+          lastStep.segmentEnd = toNode.segmentIndex;
+
+          // Calculate the incremental fare for this segment
+          const incrementalDistance = edge.distance;
+          lastStep.distance += incrementalDistance;
+
+          if (edge.routeType === "PUJ") {
+            // For PUJ, we need to recalculate the total fare for the entire distance
+            lastStep.fare = calculatePUJFare(lastStep.distance);
+          } else {
+            // For tricycles, just add the fixed fare if it's a new segment
+            // (but since we're extending, we shouldn't add more fare)
+            // Tricycle fare is typically per ride, not per distance
+          }
+        } else {
+          // Add new step
+          const stepFare =
+            edge.routeType === "PUJ"
+              ? calculatePUJFare(edge.distance)
+              : edge.fare;
+
+          steps.push({
+            mode: edge.routeType,
+            routeName: edge.routeName,
+            start: fromNode.point,
+            end: toNode.point,
+            segmentStart: fromNode.segmentIndex,
+            segmentEnd: toNode.segmentIndex,
+            distance: edge.distance,
+            fare: stepFare,
+            description:
+              edge.routeType === "PUJ"
+                ? "Public Utility Jeepney Route"
+                : "Tricycle Route",
+          });
+        }
+
+        totalDistance += edge.distance;
+
+        // Only add to total fare when creating a new step
+        // For PUJ, the fare is recalculated for the entire distance when extending
+        if (
+          !(lastStep && lastStep.routeName === edge.routeName) ||
+          edge.routeType !== "PUJ"
+        ) {
+          totalFare +=
+            edge.routeType === "PUJ"
+              ? calculatePUJFare(edge.distance)
+              : edge.fare;
+        }
+      }
+
+      path.push(cameFrom[current]);
+      current = cameFrom[current];
+    }
+
+    // The path array goes from end to start, so we need to reverse it
+    steps.reverse();
+
+    // For PUJ routes, ensure total fare matches the step's calculated fare
+    if (steps.length === 1 && steps[0].mode === "PUJ") {
+      totalFare = steps[0].fare;
+    }
+
+    // Determine route type based on number of steps
+    let routeType;
+    if (steps.length === 1) {
+      routeType = "direct";
+    } else if (steps.length === 2) {
+      routeType = "combined";
+    } else {
+      routeType = "triple";
+    }
+
+    // Build the final route object
     return {
-      bestRoute,
-      allOptions: bestRoutes,
+      type: routeType,
+      steps: steps,
+      totalDistance: totalDistance,
+      totalFare: totalFare,
+      transferDistances: transferDistances,
+      transferPoints: getTransferPoints(steps, graph),
     };
   };
 
-  // Visualize the selected route combination on the map
+  /**
+   * Extracts transfer points from the steps
+   */
+  const getTransferPoints = (steps, graph) => {
+    if (steps.length < 2) return [];
+
+    const transferPoints = [];
+
+    for (let i = 0; i < steps.length - 1; i++) {
+      const currentStep = steps[i];
+      const nextStep = steps[i + 1];
+
+      // Find the transfer point between these two steps
+      const transferPoint = {
+        point1: currentStep.end,
+        point2: nextStep.start,
+        distance: calculateDistance(currentStep.end, nextStep.start),
+        index1: currentStep.segmentEnd,
+        index2: nextStep.segmentStart,
+      };
+
+      transferPoints.push(transferPoint);
+    }
+
+    return transferPoints;
+  };
+
+  const formatRouteName = (route) => {
+    if (!route) return "Unknown Route";
+
+    if (route.type === "direct") {
+      return `${route.steps[0].routeName} (${route.steps[0].mode})`;
+    }
+
+    if (route.type === "combined") {
+      return `${route.steps[0].routeName} → ${route.steps[1].routeName}`;
+    }
+
+    if (route.type === "triple") {
+      return `${route.steps[0].routeName} → ${route.steps[1].routeName} → ${route.steps[2].routeName}`;
+    }
+
+    return "Custom Route";
+  };
+
+  // Calculate estimated travel time
+  const calculateEstimatedTime = (route) => {
+    if (!route || !route.steps || !Array.isArray(route.steps)) {
+      console.error("Invalid route structure in calculateEstimatedTime", route);
+      return 0; // Return default value if route is invalid
+    }
+
+    let totalMinutes = 0;
+
+    route.steps.forEach((step, index) => {
+      if (!step || typeof step.distance !== "number") {
+        console.error("Invalid step in route", step);
+        return; // Skip invalid steps
+      }
+
+      // For PUJ and Tricycle, estimate based on distance
+      // PUJ average speed: 20 km/h (333 meters/min)
+      // Tricycle average speed: 15 km/h (250 meters/min)
+      const speedMetersPerMinute = step.mode === "PUJ" ? 333 : 250;
+      totalMinutes += step.distance / speedMetersPerMinute;
+
+      // Add transfer time (waiting time) for all legs except the first
+      if (index > 0) {
+        // Waiting time depends on transport type
+        const waitingTime = step.mode === "PUJ" ? 5 : 3;
+        totalMinutes += waitingTime;
+
+        // Add walking time for transfers based on transfer distance
+        if (route.type === "combined" && index === 1 && route.transferPoint) {
+          const walkingTimeMinutes = (route.transferPoint.distance || 0) / 80; // 80m per minute walking speed
+          totalMinutes += walkingTimeMinutes;
+        } else if (route.type === "triple" && route.transferDistances) {
+          const walkingTimeMinutes =
+            (route.transferDistances[index - 1] || 0) / 80;
+          totalMinutes += walkingTimeMinutes;
+        }
+      }
+    });
+
+    return Math.round(totalMinutes);
+  };
+
+  // Function to draw a polyline between start and destination
+  const drawStartToDestinationRoute = async (
+    startCoords,
+    endCoords,
+    mapInstance
+  ) => {
+    if (!mapInstance || !startCoords || !endCoords) {
+      console.error("Missing required parameters for drawing route");
+      return null;
+    }
+
+    console.log("Drawing direct route from start to destination");
+
+    try {
+      // Flip coordinates for ORS API (they expect [longitude, latitude])
+      const startPoint = startCoords;
+      const endPoint = endCoords;
+
+      // Create request body for OpenRouteService
+      const requestBody = {
+        coordinates: [startPoint, endPoint],
+        preference: "shortest",
+        profile: "foot-walking", // Using walking profile to get a direct path
+        format: "geojson",
+        instructions: false,
+      };
+
+      // Make API request to OpenRouteService
+      const response = await orsDirections.calculate(requestBody);
+
+      if (response && response.features && response.features.length > 0) {
+        // Get coordinates from the response
+        const routeCoordinates = response.features[0].geometry.coordinates;
+
+        // Convert coordinates format for Leaflet (leaflet uses [lat, lng])
+        const leafletCoords = routeCoordinates.map((coord) => [
+          coord[1],
+          coord[0],
+        ]);
+
+        // Draw the polyline on the map with dotted style to differentiate it
+        const routePolyline = L.polyline(leafletCoords, {
+          color: "#FF4500", // Orange-red color
+          weight: 3,
+          opacity: 0.8,
+          dashArray: "5, 10", // Creates a dotted line
+          lineCap: "round",
+        }).addTo(mapInstance);
+
+        console.log("Direct route polyline added to map");
+        return routePolyline;
+      } else {
+        console.error("Failed to get route from OpenRouteService");
+        return null;
+      }
+    } catch (error) {
+      console.error("Error drawing direct route:", error);
+      return null;
+    }
+  };
+
+  // Update the findBestRoute function to include the direct polyline
+  const findBestRoute = async (start, destination, mapInstance) => {
+    console.log("Finding best route from:", start, "to:", destination);
+
+    const parseCoordinates = (coords) => {
+      if (!coords) return null;
+      const [lng, lat] = coords.split(",").map(Number);
+      return isNaN(lat) || isNaN(lng) ? null : [lng, lat];
+    };
+
+    const startCoords = parseCoordinates(start);
+    const endCoords = parseCoordinates(destination);
+
+    if (!startCoords || !endCoords) {
+      console.error("Invalid start or destination coordinates");
+      return null;
+    }
+
+    // Draw a direct polyline between start and destination
+    const directLine = await drawStartToDestinationRoute(
+      startCoords,
+      endCoords,
+      mapInstance
+    );
+
+    // Use the A* algorithm for route finding
+    const routeResult = findBestRouteWithAStar(
+      startCoords,
+      endCoords,
+      mapInstance
+    );
+
+    if (!routeResult || !routeResult.bestRoute) {
+      console.error("No valid route found");
+      return null;
+    }
+
+    // Return the best route with additional information
+    return {
+      name: formatRouteName(routeResult.bestRoute),
+      steps: routeResult.bestRoute.steps,
+      totalDistance: Math.round(routeResult.bestRoute.totalDistance),
+      totalFare: routeResult.bestRoute.totalFare,
+      estimatedTime: calculateEstimatedTime(routeResult.bestRoute),
+      routeType: routeResult.bestRoute.type,
+      allOptions: routeResult.allOptions,
+      directLine: directLine, // Include the direct line reference
+    };
+  };
+
+  // daan nga wa nag gamit ug drawn polyline sa user start ug destination
+  // const findBestRoute = async (start, destination, mapInstance) => {
+  //   console.log("Finding best route from:", start, "to:", destination);
+
+  //   const parseCoordinates = (coords) => {
+  //     if (!coords) return null;
+  //     const [lng, lat] = coords.split(",").map(Number);
+  //     return isNaN(lat) || isNaN(lng) ? null : [lng, lat];
+  //   };
+
+  //   const startCoords = parseCoordinates(start);
+  //   const endCoords = parseCoordinates(destination);
+
+  //   if (!startCoords || !endCoords) {
+  //     console.error("Invalid start or destination coordinates");
+  //     return null;
+  //   }
+
+  //   // Use the A* algorithm for route finding
+  //   const routeResult = findBestRouteWithAStar(
+  //     startCoords,
+  //     endCoords,
+  //     mapInstance
+  //   );
+
+  //   if (!routeResult || !routeResult.bestRoute) {
+  //     console.error("No valid route found");
+  //     return null;
+  //   }
+
+  //   // Return the best route with additional information
+  //   return {
+  //     name: formatRouteName(routeResult.bestRoute),
+  //     steps: routeResult.bestRoute.steps,
+  //     totalDistance: Math.round(routeResult.bestRoute.totalDistance),
+  //     totalFare: routeResult.bestRoute.totalFare,
+  //     estimatedTime: calculateEstimatedTime(routeResult.bestRoute),
+  //     routeType: routeResult.bestRoute.type,
+  //     allOptions: routeResult.allOptions,
+  //   };
+  // };
+
+  // Update the visualizeRouteCombination to handle A* results
   const visualizeRouteCombination = (route, allRoutes, mapInstance) => {
     if (!mapInstance) return;
 
@@ -634,7 +1141,7 @@ export function useRoutes() {
       if (routeObj && routeObj.polyline) {
         routeObj.polyline.setStyle({ opacity: 1, weight: 5 });
 
-        // Optional: Highlight specific segment of the route being used
+        // Highlight specific segment of the route being used
         if (step.segmentStart !== undefined && step.segmentEnd !== undefined) {
           const useCoords = routeObj.routedCoordinates || routeObj.coordinates;
           const segmentCoords = useCoords
@@ -656,27 +1163,12 @@ export function useRoutes() {
     });
 
     // Add markers for transfer points
-    if (route.type === "combined" && route.transferPoint) {
-      // For two-route combination
-      L.marker([route.transferPoint.point1[1], route.transferPoint.point1[0]], {
-        icon: L.divIcon({
-          className: "transfer-marker",
-          html: '<div style="background-color:#ff6b6b;width:14px;height:14px;border-radius:50%;border:2px solid white;"></div>',
-          iconSize: [14, 14],
-        }),
-      })
-        .addTo(mapInstance)
-        .bindTooltip(
-          `Transfer: ${route.steps[0].routeName} → ${route.steps[1].routeName}<br>` +
-            `Distance: ${Math.round(route.transferPoint.distance)}m`
-        );
-    } else if (route.type === "triple" && route.transferPoints) {
-      // For three-route combination
-      route.transferPoints.forEach((tp, idx) => {
-        const fromRoute = route.steps[idx].routeName;
-        const toRoute = route.steps[idx + 1].routeName;
+    if (route.transferPoints && route.transferPoints.length > 0) {
+      route.transferPoints.forEach((transferPoint, index) => {
+        const fromRoute = route.steps[index].routeName;
+        const toRoute = route.steps[index + 1].routeName;
 
-        L.marker([tp.point1[1], tp.point1[0]], {
+        L.marker([transferPoint.point1[1], transferPoint.point1[0]], {
           icon: L.divIcon({
             className: "transfer-marker",
             html: '<div style="background-color:#ff6b6b;width:14px;height:14px;border-radius:50%;border:2px solid white;"></div>',
@@ -685,105 +1177,16 @@ export function useRoutes() {
         })
           .addTo(mapInstance)
           .bindTooltip(
-            `Transfer ${idx + 1}: ${fromRoute} → ${toRoute}<br>` +
-              `Distance: ${Math.round(tp.distance)}m`
+            `Transfer ${index + 1}: ${fromRoute} → ${toRoute}<br>` +
+              `Distance: ${Math.round(transferPoint.distance)}m`
           );
       });
     }
   };
 
-  const formatRouteName = (route) => {
-    if (route.type === "direct") {
-      return `${route.steps[0].routeName} (${route.steps[0].mode})`;
-    }
-
-    if (route.type === "combined") {
-      return `${route.steps[0].routeName} → ${route.steps[1].routeName}`;
-    }
-
-    if (route.type === "triple") {
-      return `${route.steps[0].routeName} → ${route.steps[1].routeName} → ${route.steps[2].routeName}`;
-    }
-
-    return "Custom Route";
-  };
-
-  // Calculate estimated travel time
-  const calculateEstimatedTime = (route) => {
-    let totalMinutes = 0;
-
-    route.steps.forEach((step, index) => {
-      // For PUJ and Tricycle, estimate based on distance
-      // PUJ average speed: 20 km/h (333 meters/min)
-      // Tricycle average speed: 15 km/h (250 meters/min)
-      const speedMetersPerMinute = step.mode === "PUJ" ? 333 : 250;
-      totalMinutes += step.distance / speedMetersPerMinute;
-
-      // Add transfer time (waiting time) for all legs except the first
-      if (index > 0) {
-        // Waiting time depends on transport type
-        const waitingTime = step.mode === "PUJ" ? 5 : 3;
-        totalMinutes += waitingTime;
-
-        // Add walking time for transfers based on transfer distance
-        if (route.type === "combined" && index === 1) {
-          const walkingTimeMinutes = route.transferPoint.distance / 80; // 80m per minute walking speed
-          totalMinutes += walkingTimeMinutes;
-        } else if (route.type === "triple") {
-          const walkingTimeMinutes = route.transferDistances[index - 1] / 80;
-          totalMinutes += walkingTimeMinutes;
-        }
-      }
-    });
-
-    return Math.round(totalMinutes);
-  };
-
-  // Update the findBestRoute to use our improved approach
-  const findBestRoute = async (start, destination, mapInstance) => {
-    console.log("Finding best route from:", start, "to:", destination);
-
-    const parseCoordinates = (coords) => {
-      if (!coords) return null;
-      const [lng, lat] = coords.split(",").map(Number);
-      return isNaN(lat) || isNaN(lng) ? null : [lng, lat];
-    };
-
-    const startCoords = parseCoordinates(start);
-    const endCoords = parseCoordinates(destination);
-
-    if (!startCoords || !endCoords) {
-      console.error("Invalid start or destination coordinates");
-      return null;
-    }
-
-    // Use the improved route combination function
-    const routeResult = findBestRouteCombination(
-      startCoords,
-      endCoords,
-      mapInstance
-    );
-
-    if (!routeResult || !routeResult.bestRoute) {
-      console.error("No valid route found");
-      return null;
-    }
-
-    // Return the best route with additional information
-    return {
-      name: formatRouteName(routeResult.bestRoute),
-      steps: routeResult.bestRoute.steps,
-      totalDistance: Math.round(routeResult.bestRoute.totalDistance),
-      totalFare: routeResult.bestRoute.totalFare,
-      estimatedTime: calculateEstimatedTime(routeResult.bestRoute),
-      routeType: routeResult.bestRoute.type,
-      allOptions: routeResult.allOptions,
-    };
-  };
-
   return {
     loadRoutes,
     findBestRoute,
-    findBestRouteCombination,
+    findBestRouteWithAStar, // Expose the A* implementation
   };
 }

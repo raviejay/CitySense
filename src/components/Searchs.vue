@@ -122,7 +122,7 @@ const formatTime = (minutes) => {
     <v-card v-if="bestRoute" class="pa-4 mt-4">
       <v-card-title class="d-flex justify-space-between align-center">
         <div>{{ bestRoute.name }}</div>
-        <v-chip color="primary">₱{{ bestRoute.totalFare.toFixed(2) }}</v-chip>
+        <v-chip color="primary">₱{{ bestRoute.totalFare }}</v-chip>
       </v-card-title>
 
       <v-card-subtitle>
@@ -134,35 +134,64 @@ const formatTime = (minutes) => {
 
       <!-- Route steps -->
       <div class="route-steps">
-        <div v-for="(step, index) in bestRoute.steps" :key="index" class="step">
-          <div class="step-icon">
-            <v-icon :color="step.mode === 'Walk' ? 'green' : 'primary'">
-              {{ getTransportIcon(step.mode) }}
-            </v-icon>
+        <template v-for="(step, index) in bestRoute.steps" :key="index">
+          <!-- Show transfer step if not first step -->
+          <div
+            v-if="
+              index > 0 &&
+              bestRoute.transferPoints &&
+              bestRoute.transferPoints[index - 1]
+            "
+            class="step transfer-step"
+          >
+            <div class="step-icon">
+              <v-icon color="green">mdi-walk</v-icon>
+            </div>
+            <div class="step-content">
+              <div class="step-header">
+                <strong>Walk</strong>
+                <span class="ml-auto">
+                  {{
+                    formatDistance(bestRoute.transferPoints[index - 1].distance)
+                  }}
+                </span>
+              </div>
+              <div class="step-details">
+                Transfer between routes (about
+                {{
+                  Math.round(bestRoute.transferPoints[index - 1].distance / 80)
+                }}
+                min walk)
+              </div>
+            </div>
           </div>
 
-          <div class="step-content">
-            <div class="step-header">
-              <strong>{{ step.mode }}</strong>
-              <span v-if="step.routeName" class="ml-2"
-                >({{ step.routeName }})</span
-              >
-              <span class="ml-auto">{{ formatDistance(step.distance) }}</span>
+          <!-- Transportation step -->
+          <div class="step">
+            <div class="step-icon">
+              <v-icon :color="step.mode === 'Walk' ? 'green' : 'primary'">
+                {{ getTransportIcon(step.mode) }}
+              </v-icon>
             </div>
-
-            <div class="step-details" v-if="step.mode === 'Walk'">
-              Walk for {{ Math.round(step.duration / 60) }} minutes
-            </div>
-            <div class="step-details" v-else>
-              {{
-                step.description ||
-                `Take ${step.mode} for approximately ${Math.round(
-                  step.distance / 333
-                )} minutes`
-              }}
+            <div class="step-content">
+              <div class="step-header">
+                <strong>{{ step.mode }}</strong>
+                <span v-if="step.routeName" class="ml-2"
+                  >({{ step.routeName }})</span
+                >
+                <span class="ml-auto">{{ formatDistance(step.distance) }}</span>
+              </div>
+              <div class="step-details">
+                {{
+                  step.description ||
+                  `Take ${step.mode} for about ${Math.round(
+                    step.distance / (step.mode === "PUJ" ? 333 : 250)
+                  )} minutes`
+                }}
+              </div>
             </div>
           </div>
-        </div>
+        </template>
       </div>
 
       <v-divider class="my-3"></v-divider>
@@ -176,14 +205,8 @@ const formatTime = (minutes) => {
             </div>
           </v-col>
           <v-col cols="6">
-            <div class="text-caption">Walking Distance</div>
-            <div class="text-body-1">
-              {{ formatDistance(bestRoute.totalWalkingDistance) }}
-            </div>
-          </v-col>
-          <v-col cols="6">
             <div class="text-caption">Total Fare</div>
-            <div class="text-body-1">₱{{ bestRoute.totalFare.toFixed(2) }}</div>
+            <div class="text-body-1">₱{{ bestRoute.totalFare }}</div>
           </v-col>
           <v-col cols="6">
             <div class="text-caption">Est. Travel Time</div>
