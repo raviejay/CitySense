@@ -5,7 +5,7 @@ import { useRoutesStore } from "@/stores/routeStore";
 import precalculatedRoutes from "@/data/precalculatedRoutes.json";
 import precalculatedTricycleRoutes from "@/data/precalculatedTricycleRoutes.json";
 
-const ORS_API_KEY = "5b3ce3597851110001cf62489cfc14e709f446268359f1fe73a6dc38";
+const ORS_API_KEY = "5b3ce3597851110001cf62481cc8343cfad84cc5960086b346336c5e";
 const orsDirections = new Ors.Directions({ api_key: ORS_API_KEY });
 
 // Maximum transfer distance between routes in meters (300m)
@@ -18,8 +18,6 @@ const PUJ_ADDITIONAL_FARE_PER_KM = 1.75; // Additional fare per km
 
 export function useRoutes() {
   const store = useRoutesStore();
-  let currentDirectRoutePolyline = null;
-  let currentRouteVisualization = null;
 
   const loadRoutes = async (mapInstance) => {
     if (!mapInstance) return;
@@ -65,7 +63,7 @@ export function useRoutes() {
 
         route.polyline = L.polyline(
           coordsToUse.map((coord) => [coord[1], coord[0]]),
-          { color: routeColor, weight: 4, opacity: 0.0 }
+          { color: routeColor, weight: 4, opacity: 0 }
         ).addTo(mapInstance);
       } catch (error) {
         console.error(`Error loading route ${route.name}:`, error);
@@ -350,7 +348,7 @@ export function useRoutes() {
     const bestRoute = bestRoutes.length > 0 ? bestRoutes[0] : null;
 
     if (bestRoute) {
-      console.log("Best routes found with A*:", bestRoute);
+      console.log("Best route found with A*:", bestRoute);
       visualizeRouteCombination(bestRoute, allRoutes, mapInstance);
 
       console.log(
@@ -412,7 +410,7 @@ export function useRoutes() {
 
       // Create nodes for key points on each route (start, end, and some intermediate points)
       // We don't need a node for every coordinate to keep the graph manageable
-      const samplingRate = Math.max(1, Math.floor(useCoords.length / 10)); // Sample ~10 points
+      const samplingRate = Math.max(1, Math.floor(useCoords.length / 20)); // Sample ~10 points
 
       for (let i = 0; i < useCoords.length; i += samplingRate) {
         const nodeId = `${route.name}_${i}`;
@@ -709,6 +707,7 @@ export function useRoutes() {
         const DISTANCE_WEIGHT = 0.4;
         const FARE_WEIGHT = 0.3;
         const TRANSFER_WEIGHT = 0.3;
+        const TRANSFER_PENALTY = 0.5;
 
         // Normalize scores
         const normalizedDistance = distance / 5000; // Normalized to 5km
@@ -718,7 +717,8 @@ export function useRoutes() {
         const edgeCost =
           DISTANCE_WEIGHT * normalizedDistance +
           FARE_WEIGHT * normalizedFare +
-          TRANSFER_WEIGHT * normalizedTransfer;
+          TRANSFER_WEIGHT * normalizedTransfer +
+          (edge.isTransfer ? TRANSFER_PENALTY : 0);
 
         const tentativeGScore = gScore[current] + edgeCost;
 
@@ -960,7 +960,502 @@ export function useRoutes() {
     return Math.round(totalMinutes);
   };
 
-  // // Update the findBestRoute to use A* algorithm
+  const drawUserRoutePolyline = (
+    startCoords,
+    endCoords,
+    route,
+    mapInstance
+  ) => {
+    if (!mapInstance || !startCoords || !endCoords || !route || !route.steps) {
+      console.error("Missing required parameters for drawing user route");
+      return null;
+    }
+
+    console.log("Drawing enhanced user route along the recommended path");
+
+    try {
+      // Clear any existing user route elements
+      mapInstance.eachLayer((layer) => {
+        if (
+          layer instanceof L.Polyline &&
+          (layer.options.className === "user-route" ||
+            layer.options.className === "user-transfer")
+        ) {
+          mapInstance.removeLayer(layer);
+        }
+        if (
+          layer instanceof L.Marker &&
+          (layer.options.className === "start-marker" ||
+            layer.options.className === "end-marker" ||
+            layer.options.className === "transfer-marker")
+        ) {
+          mapInstance.removeLayer(layer);
+        }
+      });
+
+      // Create arrays to hold coordinates for different parts of the route
+      const routeSegments = [];
+      const transferSegments = [];
+
+      // Add start point
+      const startPoint = [startCoords[1], startCoords[0]];
+
+      // Process each step of the route
+      route.steps.forEach((step, index) => {
+        if (!step) return;
+
+        // Find the route object from the store
+        const routeObj = store
+          .getRoutes()
+          .find((r) => r.name === step.routeName);
+        if (!routeObj) return;
+
+        // Get coordinates for this route segment
+        const useCoords = routeObj.routedCoordinates || routeObj.coordinates;
+        if (!useCoords || !Array.isArray(useCoords)) return;
+
+        // Determine direction of travel along the route
+        const isForward = step.segmentStart <= step.segmentEnd;
+        const segmentStart = Math.min(step.segmentStart, step.segmentEnd);
+        const segmentEnd = Math.max(step.segmentStart, step.segmentEnd);
+
+        // Extract the segment coordinates in the correct direction
+        let segmentCoords = useCoords.slice(segmentStart, segmentEnd + 1);
+        if (!isForward) {
+          segmentCoords = segmentCoords.reverse();
+        }
+
+        // Convert to Leaflet format [lat, lng]
+        const leafletCoords = segmentCoords.map((coord) => [
+          coord[1],
+          coord[0],
+        ]);
+
+        // Add to route segments
+        routeSegments.push({
+          mode: step.mode,
+          routeName: step.routeName,
+          coordinates: leafletCoords,
+        });
+
+        // Add transfer segment if there's a next step
+        if (
+          index < route.steps.length - 1 &&
+          route.transferPoints &&
+          route.transferPoints[index]
+        ) {
+          const transferPoint = route.transferPoints[index];
+          const transferStart = [
+            transferPoint.point1[1],
+            transferPoint.point1[0],
+          ];
+          const transferEnd = [
+            transferPoint.point2[1],
+            transferPoint.point2[0],
+          ];
+
+          transferSegments.push({
+            start: transferStart,
+            end: transferEnd,
+            distance: transferPoint.distance,
+          });
+        }
+      });
+
+      // Add end point
+      const endPoint = [endCoords[1], endCoords[0]];
+
+      // Draw the main route segments with appropriate styling
+      const routePolylines = [];
+
+      // Draw the path from start to first route segment
+      if (routeSegments.length > 0) {
+        const firstSegmentStart = routeSegments[0].coordinates[0];
+        const startToFirstSegment = L.polyline(
+          [startPoint, firstSegmentStart],
+          {
+            color: "#3388ff",
+            weight: 3,
+            dashArray: "5, 5",
+            className: "user-transfer",
+          }
+        ).addTo(mapInstance);
+        routePolylines.push(startToFirstSegment);
+      }
+
+      // Draw each transportation segment
+      routeSegments.forEach((segment, index) => {
+        const color = segment.mode === "PUJ" ? "#0055ff" : "#ff6600";
+        const weight = 6;
+
+        const polyline = L.polyline(segment.coordinates, {
+          color: color,
+          weight: weight,
+          opacity: 0.9,
+          lineCap: "round",
+          className: "user-route",
+        }).addTo(mapInstance);
+
+        // Add tooltip with route information
+        polyline.bindTooltip(`${segment.routeName} (${segment.mode})`, {
+          permanent: false,
+          direction: "top",
+          className: "route-tooltip",
+        });
+
+        routePolylines.push(polyline);
+
+        // Connect to next segment or end point
+        if (index < routeSegments.length - 1) {
+          const nextSegmentStart = routeSegments[index + 1].coordinates[0];
+          const segmentEnd =
+            segment.coordinates[segment.coordinates.length - 1];
+
+          const connector = L.polyline([segmentEnd, nextSegmentStart], {
+            color: "#3388ff",
+            weight: 3,
+            dashArray: "5, 5",
+            className: "user-transfer",
+          }).addTo(mapInstance);
+          routePolylines.push(connector);
+        }
+      });
+
+      // Draw the path from last route segment to end point
+      if (routeSegments.length > 0) {
+        const lastSegmentEnd =
+          routeSegments[routeSegments.length - 1].coordinates.slice(-1)[0];
+        const lastSegmentToEnd = L.polyline([lastSegmentEnd, endPoint], {
+          color: "#3388ff",
+          weight: 3,
+          dashArray: "5, 5",
+          className: "user-transfer",
+        }).addTo(mapInstance);
+        routePolylines.push(lastSegmentToEnd);
+      }
+
+      // Draw transfer segments (walking paths)
+      transferSegments.forEach((transfer, index) => {
+        const transferPolyline = L.polyline([transfer.start, transfer.end], {
+          color: "#4CAF50",
+          weight: 4,
+          dashArray: "10, 5",
+          opacity: 0.8,
+          className: "user-transfer",
+        }).addTo(mapInstance);
+
+        // Add transfer marker
+        const transferMarker = L.marker(transfer.end, {
+          icon: L.divIcon({
+            className: "transfer-marker",
+            html:
+              '<div style="background-color:#ff9800;width:16px;height:16px;border-radius:50%;border:2px solid white;display:flex;align-items:center;justify-content:center;font-size:10px;color:white;font-weight:bold;">' +
+              (index + 1) +
+              "</div>",
+            iconSize: [20, 20],
+          }),
+        })
+          .addTo(mapInstance)
+          .bindTooltip(
+            `Transfer Point ${index + 1}<br>Walking distance: ${Math.round(
+              transfer.distance
+            )}m`,
+            { permanent: false }
+          );
+
+        routePolylines.push(transferPolyline);
+      });
+
+      // Add enhanced start marker
+      const startMarker = L.marker(startPoint, {
+        icon: L.divIcon({
+          className: "start-marker",
+          html: '<div style="background-color:#4CAF50;width:20px;height:20px;border-radius:50%;border:3px solid white;display:flex;align-items:center;justify-content:center;"><i class="fas fa-play" style="color:white;font-size:10px;margin-left:2px;"></i></div>',
+          iconSize: [26, 26],
+        }),
+        zIndexOffset: 1000,
+      })
+        .addTo(mapInstance)
+        .bindTooltip("Start Point", { permanent: false });
+
+      // Add enhanced destination marker
+      const endMarker = L.marker(endPoint, {
+        icon: L.divIcon({
+          className: "end-marker",
+          html: '<div style="background-color:#f44336;width:20px;height:20px;border-radius:50%;border:3px solid white;display:flex;align-items:center;justify-content:center;"><i class="fas fa-map-marker-alt" style="color:white;font-size:10px;"></i></div>',
+          iconSize: [26, 26],
+        }),
+        zIndexOffset: 1000,
+      })
+        .addTo(mapInstance)
+        .bindTooltip("Destination", { permanent: false });
+
+      // Fit bounds to show the entire route
+      const allPoints = [
+        startPoint,
+        ...routeSegments.flatMap((seg) => seg.coordinates),
+        ...transferSegments.flatMap((trans) => [trans.start, trans.end]),
+        endPoint,
+      ];
+
+      if (allPoints.length > 1) {
+        mapInstance.fitBounds(allPoints, {
+          padding: [50, 50],
+          maxZoom: 16,
+        });
+      }
+
+      console.log("Enhanced user route visualization complete");
+      return {
+        polylines: routePolylines,
+        startMarker: startMarker,
+        endMarker: endMarker,
+        transferMarkers: transferSegments.map((_, i) =>
+          mapInstance.getLayers().find(
+            (l) =>
+              l.options.icon &&
+              l.options.icon.options.className === "transfer-marker" &&
+              l.getTooltip() &&
+              l
+                .getTooltip()
+                .getContent()
+                .includes(`Transfer Point ${i + 1}`)
+          )
+        ),
+      };
+    } catch (error) {
+      console.error("Error drawing enhanced user route:", error);
+      return null;
+    }
+  };
+
+  // // Function to draw a polyline between start and destination
+  // const drawStartToDestinationRoute = async (
+  //   startCoords,
+  //   endCoords,
+  //   mapInstance
+  // ) => {
+  //   if (!mapInstance || !startCoords || !endCoords) {
+  //     console.error("Missing required parameters for drawing route");
+  //     return null;
+  //   }
+
+  //   console.log("Drawing direct route from start to destination");
+
+  //   try {
+  //     // Flip coordinates for ORS API (they expect [longitude, latitude])
+  //     const startPoint = startCoords;
+  //     const endPoint = endCoords;
+
+  //     // Create request body for OpenRouteService
+  //     const requestBody = {
+  //       coordinates: [startPoint, endPoint],
+  //       preference: "shortest",
+  //       profile: "foot-walking", // Using walking profile to get a direct path
+  //       format: "geojson",
+  //       instructions: false,
+  //     };
+
+  //     // Make API request to OpenRouteService
+  //     const response = await orsDirections.calculate(requestBody);
+
+  //     if (response && response.features && response.features.length > 0) {
+  //       // Get coordinates from the response
+  //       const routeCoordinates = response.features[0].geometry.coordinates;
+
+  //       // Convert coordinates format for Leaflet (leaflet uses [lat, lng])
+  //       const leafletCoords = routeCoordinates.map((coord) => [
+  //         coord[1],
+  //         coord[0],
+  //       ]);
+
+  //       // Draw the polyline on the map with dotted style to differentiate it
+  //       const routePolyline = L.polyline(leafletCoords, {
+  //         color: "#FF4500", // Orange-red color
+  //         weight: 3,
+  //         opacity: 0.8,
+  //         dashArray: "5, 10", // Creates a dotted line
+  //         lineCap: "round",
+  //       }).addTo(mapInstance);
+
+  //       console.log("Direct route polyline added to map");
+  //       return routePolyline;
+  //     } else {
+  //       console.error("Failed to get route from OpenRouteService");
+  //       return null;
+  //     }
+  //   } catch (error) {
+  //     console.error("Error drawing direct route:", error);
+  //     return null;
+  //   }
+  // };
+
+  // // Update the findBestRoute function to include the direct polyline
+  // const findBestRoute = async (start, destination, mapInstance) => {
+  //   console.log("Finding best route from:", start, "to:", destination);
+
+  //   const parseCoordinates = (coords) => {
+  //     if (!coords) return null;
+  //     const [lng, lat] = coords.split(",").map(Number);
+  //     return isNaN(lat) || isNaN(lng) ? null : [lng, lat];
+  //   };
+
+  //   const startCoords = parseCoordinates(start);
+  //   const endCoords = parseCoordinates(destination);
+
+  //   if (!startCoords || !endCoords) {
+  //     console.error("Invalid start or destination coordinates");
+  //     return null;
+  //   }
+
+  //   // Draw a direct polyline between start and destination
+  //   const directLine = await drawStartToDestinationRoute(
+  //     startCoords,
+  //     endCoords,
+  //     mapInstance
+  //   );
+
+  //   // Use the A* algorithm for route finding
+  //   const routeResult = findBestRouteWithAStar(
+  //     startCoords,
+  //     endCoords,
+  //     mapInstance
+  //   );
+
+  //   if (!routeResult || !routeResult.bestRoute) {
+  //     console.error("No valid route found");
+  //     return null;
+  //   }
+
+  //   // Return the best route with additional information
+  //   return {
+  //     name: formatRouteName(routeResult.bestRoute),
+  //     steps: routeResult.bestRoute.steps,
+  //     totalDistance: Math.round(routeResult.bestRoute.totalDistance),
+  //     totalFare: routeResult.bestRoute.totalFare,
+  //     estimatedTime: calculateEstimatedTime(routeResult.bestRoute),
+  //     routeType: routeResult.bestRoute.type,
+  //     allOptions: routeResult.allOptions,
+  //     directLine: directLine, // Include the direct line reference
+  //   };
+  // };
+
+  //daan nga wa nag gamit ug drawn polyline sa user start ug destination
+
+  const findBestRoute = async (start, destination, mapInstance) => {
+    console.log("Finding best route from:", start, "to:", destination);
+
+    const parseCoordinates = (coords) => {
+      if (!coords) return null;
+      const [lng, lat] = coords.split(",").map(Number);
+      return isNaN(lat) || isNaN(lng) ? null : [lng, lat];
+    };
+
+    const startCoords = parseCoordinates(start);
+    const endCoords = parseCoordinates(destination);
+
+    if (!startCoords || !endCoords) {
+      console.error("Invalid start or destination coordinates");
+      return null;
+    }
+
+    // Use the A* algorithm for route finding
+    const routeResult = findBestRouteWithAStar(
+      startCoords,
+      endCoords,
+      mapInstance
+    );
+
+    if (!routeResult || !routeResult.bestRoute) {
+      console.error("No valid route found");
+      return null;
+    }
+
+    // Return the best route with additional information
+    return {
+      name: formatRouteName(routeResult.bestRoute),
+      steps: routeResult.bestRoute.steps,
+      totalDistance: Math.round(routeResult.bestRoute.totalDistance),
+      totalFare: routeResult.bestRoute.totalFare,
+      estimatedTime: calculateEstimatedTime(routeResult.bestRoute),
+      routeType: routeResult.bestRoute.type,
+      allOptions: routeResult.allOptions,
+    };
+  };
+
+  // Update the visualizeRouteCombination to handle A* results
+  const visualizeRouteCombination = (route, allRoutes, mapInstance) => {
+    if (!mapInstance) return;
+
+    // Clear any existing markers or highlighted routes
+    mapInstance.eachLayer((layer) => {
+      if (
+        layer instanceof L.Marker &&
+        layer.options.icon &&
+        layer.options.icon.options.className === "transfer-marker"
+      ) {
+        mapInstance.removeLayer(layer);
+      }
+    });
+
+    // Reset all route styles
+    allRoutes.forEach((r) => {
+      if (r.polyline) {
+        r.polyline.setStyle({ opacity: 0.2 });
+      }
+    });
+
+    // Highlight the transportation segments
+    route.steps.forEach((step) => {
+      const routeObj = allRoutes.find((r) => r.name === step.routeName);
+      if (routeObj && routeObj.polyline) {
+        routeObj.polyline.setStyle({ opacity: 1, weight: 5 });
+
+        // Highlight specific segment of the route being used
+        if (step.segmentStart !== undefined && step.segmentEnd !== undefined) {
+          const useCoords = routeObj.routedCoordinates || routeObj.coordinates;
+          const segmentCoords = useCoords
+            .slice(
+              Math.min(step.segmentStart, step.segmentEnd),
+              Math.max(step.segmentStart, step.segmentEnd) + 1
+            )
+            .map((coord) => [coord[1], coord[0]]);
+
+          if (segmentCoords.length > 1) {
+            L.polyline(segmentCoords, {
+              color: routeObj.type === "PUJ" ? "#0055ff" : "#ff6600",
+              weight: 6,
+              opacity: 1,
+            }).addTo(mapInstance);
+          }
+        }
+      }
+    });
+
+    // Add markers for transfer points
+    if (route.transferPoints && route.transferPoints.length > 0) {
+      route.transferPoints.forEach((transferPoint, index) => {
+        const fromRoute = route.steps[index].routeName;
+        const toRoute = route.steps[index + 1].routeName;
+
+        L.marker([transferPoint.point1[1], transferPoint.point1[0]], {
+          icon: L.divIcon({
+            className: "transfer-marker",
+            html: '<div style="background-color:#ff6b6b;width:14px;height:14px;border-radius:50%;border:2px solid white;"></div>',
+            iconSize: [14, 14],
+          }),
+        })
+          .addTo(mapInstance)
+          .bindTooltip(
+            `Transfer ${index + 1}: ${fromRoute} → ${toRoute}<br>` +
+              `Distance: ${Math.round(transferPoint.distance)}m`
+          );
+      });
+    }
+  };
+
+  // Update the findBestRoute function to include the user route polyline
+
   // const findBestRoute = async (start, destination, mapInstance) => {
   //   console.log("Finding best route from:", start, "to:", destination);
 
@@ -990,6 +1485,14 @@ export function useRoutes() {
   //     return null;
   //   }
 
+  //   // Draw the user route polyline following the best route path
+  //   const userRoute = drawUserRoutePolyline(
+  //     startCoords,
+  //     endCoords,
+  //     routeResult.bestRoute,
+  //     mapInstance
+  //   );
+
   //   // Return the best route with additional information
   //   return {
   //     name: formatRouteName(routeResult.bestRoute),
@@ -999,209 +1502,96 @@ export function useRoutes() {
   //     estimatedTime: calculateEstimatedTime(routeResult.bestRoute),
   //     routeType: routeResult.bestRoute.type,
   //     allOptions: routeResult.allOptions,
+  //     userRoute: userRoute, // Include the user route reference
   //   };
   // };
 
-  // Update the visualizeRouteCombination to handle A* results
-  const visualizeRouteCombination = (route, allRoutes, mapInstance) => {
-    if (!mapInstance) return;
+  // // Update the visualizeRouteCombination function to handle cleaning up the user route
+  // const visualizeRouteCombination = (route, allRoutes, mapInstance) => {
+  //   if (!mapInstance) return;
 
-    // Clear any existing markers or highlighted routes
-    mapInstance.eachLayer((layer) => {
-      if (
-        layer instanceof L.Marker &&
-        layer.options.icon &&
-        layer.options.icon.options.className === "transfer-marker"
-      ) {
-        mapInstance.removeLayer(layer);
-      }
-    });
+  //   // Clear any existing markers or highlighted routes
+  //   mapInstance.eachLayer((layer) => {
+  //     if (
+  //       layer instanceof L.Marker &&
+  //       layer.options.icon &&
+  //       (layer.options.icon.options.className === "transfer-marker" ||
+  //         layer.options.icon.options.className === "start-marker" ||
+  //         layer.options.icon.options.className === "end-marker")
+  //     ) {
+  //       mapInstance.removeLayer(layer);
+  //     }
 
-    // Reset all route styles
-    allRoutes.forEach((r) => {
-      if (r.polyline) {
-        r.polyline.setStyle({ opacity: 0 });
-      }
-    });
+  //     // Remove any existing user route polylines
+  //     if (
+  //       layer instanceof L.Polyline &&
+  //       layer.options.color === "#3388ff" &&
+  //       layer.options.weight === 5
+  //     ) {
+  //       mapInstance.removeLayer(layer);
+  //     }
+  //   });
 
-    // Highlight the transportation segments
-    route.steps.forEach((step) => {
-      const routeObj = allRoutes.find((r) => r.name === step.routeName);
-      if (routeObj && routeObj.polyline) {
-        routeObj.polyline.setStyle({ opacity: 0, weight: 5 });
+  //   // Reset all route styles
+  //   allRoutes.forEach((r) => {
+  //     if (r.polyline) {
+  //       r.polyline.setStyle({ opacity: 0.2 });
+  //     }
+  //   });
 
-        // Highlight specific segment of the route being used
-        if (step.segmentStart !== undefined && step.segmentEnd !== undefined) {
-          const useCoords = routeObj.routedCoordinates || routeObj.coordinates;
-          const segmentCoords = useCoords
-            .slice(
-              Math.min(step.segmentStart, step.segmentEnd),
-              Math.max(step.segmentStart, step.segmentEnd) + 1
-            )
-            .map((coord) => [coord[1], coord[0]]);
+  //   // Highlight the transportation segments
+  //   route.steps.forEach((step) => {
+  //     const routeObj = allRoutes.find((r) => r.name === step.routeName);
+  //     if (routeObj && routeObj.polyline) {
+  //       routeObj.polyline.setStyle({ opacity: 1, weight: 5 });
 
-          if (segmentCoords.length > 1) {
-            L.polyline(segmentCoords, {
-              color: routeObj.type === "PUJ" ? "#0055ff" : "#ff6600",
-              weight: 6,
-              opacity: 0,
-            }).addTo(mapInstance);
-          }
-        }
-      }
-    });
+  //       // Highlight specific segment of the route being used
+  //       if (step.segmentStart !== undefined && step.segmentEnd !== undefined) {
+  //         const useCoords = routeObj.routedCoordinates || routeObj.coordinates;
+  //         const segmentCoords = useCoords
+  //           .slice(
+  //             Math.min(step.segmentStart, step.segmentEnd),
+  //             Math.max(step.segmentStart, step.segmentEnd) + 1
+  //           )
+  //           .map((coord) => [coord[1], coord[0]]);
 
-    // Add markers for transfer points
-    if (route.transferPoints && route.transferPoints.length > 0) {
-      route.transferPoints.forEach((transferPoint, index) => {
-        const fromRoute = route.steps[index].routeName;
-        const toRoute = route.steps[index + 1].routeName;
+  //         if (segmentCoords.length > 1) {
+  //           L.polyline(segmentCoords, {
+  //             color: routeObj.type === "PUJ" ? "#0055ff" : "#ff6600",
+  //             weight: 6,
+  //             opacity: 1,
+  //           }).addTo(mapInstance);
+  //         }
+  //       }
+  //     }
+  //   });
 
-        L.marker([transferPoint.point1[1], transferPoint.point1[0]], {
-          icon: L.divIcon({
-            className: "transfer-marker",
-            html: '<div style="background-color:#ff6b6b;width:14px;height:14px;border-radius:50%;border:2px solid white;"></div>',
-            iconSize: [14, 14],
-          }),
-        })
-          .addTo(mapInstance)
-          .bindTooltip(
-            `Transfer ${index + 1}: ${fromRoute} → ${toRoute}<br>` +
-              `Distance: ${Math.round(transferPoint.distance)}m`
-          );
-      });
-    }
-  };
+  //   // Add markers for transfer points
+  //   if (route.transferPoints && route.transferPoints.length > 0) {
+  //     route.transferPoints.forEach((transferPoint, index) => {
+  //       const fromRoute = route.steps[index].routeName;
+  //       const toRoute = route.steps[index + 1].routeName;
 
-  // First, I'll add a function to get the driving route from OpenRouteService
-  const getDrivingRoute = async (startCoords, endCoords) => {
-    try {
-      // Convert coordinates format for ORS API (from [lng, lat] to [lng, lat])
-      const start = startCoords;
-      const end = endCoords;
-
-      // Request driving route from OpenRouteService
-      const routeRequest = {
-        coordinates: [start, end],
-        profile: "driving-car",
-        format: "geojson",
-        preference: "shortest",
-      };
-
-      const routeData = await orsDirections.calculate(routeRequest);
-
-      if (routeData && routeData.features && routeData.features.length > 0) {
-        // Extract coordinates from the GeoJSON response
-        const routeCoordinates = routeData.features[0].geometry.coordinates;
-        return routeCoordinates;
-      }
-
-      return null;
-    } catch (error) {
-      console.error(
-        "Error getting driving route from OpenRouteService:",
-        error
-      );
-      return null;
-    }
-  };
-
-  // Now, let's add a function to draw this route on the map
-  const drawDirectRoute = async (startCoords, endCoords, mapInstance) => {
-    if (!mapInstance || !startCoords || !endCoords) return null;
-
-    console.log("Drawing direct route between:", startCoords, "and", endCoords);
-
-    // Get route from OpenRouteService
-    const routeCoordinates = await getDrivingRoute(startCoords, endCoords);
-
-    if (!routeCoordinates) {
-      console.error("Failed to get direct route coordinates");
-      return null;
-    }
-
-    // Draw the route on the map
-    const directRoutePolyline = L.polyline(
-      routeCoordinates.map((coord) => [coord[1], coord[0]]),
-      {
-        color: "#448AFF",
-        weight: 4,
-        opacity: 1,
-        dashArray: "5, 5",
-      }
-    ).addTo(mapInstance);
-
-    return {
-      polyline: directRoutePolyline,
-      coordinates: routeCoordinates,
-      startCoords,
-      endCoords,
-    };
-  };
-
-  const findBestRoute = async (start, destination, mapInstance) => {
-    console.log("Finding best route from:", start, "to:", destination);
-
-    const parseCoordinates = (coords) => {
-      if (!coords) return null;
-      const [lng, lat] = coords.split(",").map(Number);
-      return isNaN(lat) || isNaN(lng) ? null : [lng, lat];
-    };
-
-    const startCoords = parseCoordinates(start);
-    const endCoords = parseCoordinates(destination);
-
-    if (!startCoords || !endCoords) {
-      console.error("Invalid start or destination coordinates");
-      return null;
-    }
-
-    // Draw the direct route first
-    const directRoute = await drawDirectRoute(
-      startCoords,
-      endCoords,
-      mapInstance
-    );
-
-    // Use the A* algorithm for route finding
-    const routeResult = findBestRouteWithAStar(
-      startCoords,
-      endCoords,
-      mapInstance
-    );
-
-    if (!routeResult || !routeResult.bestRoute) {
-      console.error("No valid route found");
-      return null;
-    }
-
-    // Return the best route with additional information
-    return {
-      name: formatRouteName(routeResult.bestRoute),
-      steps: routeResult.bestRoute.steps,
-      totalDistance: Math.round(routeResult.bestRoute.totalDistance),
-      totalFare: routeResult.bestRoute.totalFare,
-      estimatedTime: calculateEstimatedTime(routeResult.bestRoute),
-      routeType: routeResult.bestRoute.type,
-      allOptions: routeResult.allOptions,
-      directRoute: {
-        coordinates: directRoute ? directRoute.coordinates : null,
-        distance:
-          directRoute && directRoute.coordinates
-            ? directRoute.coordinates.reduce((acc, coord, i, arr) => {
-                if (i === 0) return acc;
-                return acc + calculateDistance(arr[i - 1], coord);
-              }, 0)
-            : 0,
-      },
-    };
-  };
+  //       L.marker([transferPoint.point1[1], transferPoint.point1[0]], {
+  //         icon: L.divIcon({
+  //           className: "transfer-marker",
+  //           html: '<div style="background-color:#ff6b6b;width:14px;height:14px;border-radius:50%;border:2px solid white;"></div>',
+  //           iconSize: [14, 14],
+  //         }),
+  //       })
+  //         .addTo(mapInstance)
+  //         .bindTooltip(
+  //           `Transfer ${index + 1}: ${fromRoute} → ${toRoute}<br>` +
+  //             `Distance: ${Math.round(transferPoint.distance)}m`
+  //         );
+  //     });
+  //   }
+  // };
 
   return {
     loadRoutes,
     findBestRoute,
     findBestRouteWithAStar, // Expose the A* implementation
-    drawDirectRoute, // Export the new function
-    getDrivingRoute, // Export this utility function as well
+    drawUserRoutePolyline,
   };
 }

@@ -16,7 +16,21 @@ const { loadRoutes } = useRoutes();
 
 // Initialize the map
 onMounted(() => {
-  const map = L.map(mapContainer.value).setView([8.9464, 125.4792], 14);
+  // Define Butuan City boundaries (southwest and northeast corners)
+  // Added some padding to make sure the entire city is visible
+  const southWest = L.latLng(8.8464, 125.3792);
+  const northEast = L.latLng(9.0464, 125.5792);
+  const bounds = L.latLngBounds(southWest, northEast);
+
+  // Create map with restrictions
+  const map = L.map(mapContainer.value, {
+    center: [8.946048723670792, 125.54603354770742],
+    zoom: 14,
+    maxBounds: bounds.pad(0.4), // Add padding to bounds to allow dragging to edges
+    minZoom: 12, // Restrict zooming out beyond this level
+    maxZoom: 18, // Optional: restrict maximum zoom in level
+  });
+
   L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
     attribution: "&copy; OpenStreetMap contributors",
   }).addTo(map);

@@ -32,5 +32,18 @@
     ],
     "fare": 10.0,
     "description": "Viaduct to Mahogany Vice Versa."
+  },
+  "Lastoda Tricycle": {
+    "start": [125.534991, 8.957602],
+    "end": [125.534991, 8.957602],
+    "waypoints": [
+      [125.535012, 8.957426],
+      [125.53455, 8.957231],
+      [125.532548, 8.959363],
+      [125.506906, 8.960788],
+      [125.502692, 8.987271]
+    ],
+    "fare": 15.0,
+    "description": "Langihan to Tawilon, Ambago Vice Versa."
   }
 }

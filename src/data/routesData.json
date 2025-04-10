@@ -8,7 +8,7 @@
       [125.543114, 8.950775],
       [125.542855, 8.947459]
     ],
-    "fare": 10.0,
+    "fare": 13.0,
     "description": "Scenic route with moderate traffic."
   },
   "r7": {
@@ -28,7 +28,7 @@
       [125.534846, 8.958365],
       [125.527948, 8.953551]
     ],
-    "fare": 12.5,
+    "fare": 13.0,
     "description": "Longer route with diverse road conditions."
   },
   "r10": {
@@ -38,7 +38,7 @@
       [125.60264910905764, 8.959668727879519],
       [125.602348701644564, 8.961703523758013]
     ],
-    "fare": 8.5,
+    "fare": 13.0,
     "description": "Fast route with minimal stops."
   },
   "r1": {
@@ -51,7 +51,7 @@
       [125.540718, 8.947551],
       [125.479079, 8.946618]
     ],
-    "fare": 9.75,
+    "fare": 13.0,
     "description": "Short and direct route through urban areas."
   },
   "r4": {
@@ -77,7 +77,7 @@
       [125.529467, 8.952268],
       [125.531845, 8.945705]
     ],
-    "fare": 14.0,
+    "fare": 13.0,
     "description": "Slightly longer route with smoother driving."
   },
   "r8": {
@@ -107,7 +107,7 @@
       [125.544052, 8.94466],
       [125.544274, 8.947214]
     ],
-    "fare": 16.0,
+    "fare": 13.0,
     "description": "Scenic highland route with a mix of urban roads."
   },
   "r14": {
@@ -125,7 +125,7 @@
       [125.518216, 8.942912],
       [125.519791, 8.942902]
     ],
-    "fare": 11.25,
+    "fare": 13.0,
     "description": "An economical option balancing travel time and cost."
   }
 }

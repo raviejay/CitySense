@@ -11,6 +11,8 @@
   "dependencies": {
     "@mdi/font": "^7.4.47",
     "leaflet": "^1.9.4",
+    "lodash": "^4.17.21",
+    "lodash-es": "^4.17.21",
     "openrouteservice": "^0.1.2",
     "openrouteservice-js": "^0.4.1",
     "pinia": "^2.3.1",

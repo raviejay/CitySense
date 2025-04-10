@@ -2,6 +2,9 @@
 import { ref, watch } from "vue";
 import { useRoutes } from "@/composables/useRoutes";
 import { useMapStore } from "@/stores/mapStore";
+import KartaViewViewer from "./KartaView.vue"; // Import the new component
+import MapillaryViewer from "./MapillaryView.vue";
+import ImprovedMapillaryViewer from "./ImprovedMapillaryViewer.vue";
 
 const mapStore = useMapStore(); // Access the store
 const bestRoute = ref(null);
@@ -36,6 +39,58 @@ watch(
   }
 );
 
+// Add these to your reactive state variables in the setup script
+const showStreetView = ref(false);
+const streetViewCoords = ref(null);
+
+// Add this function to handle opening the street view
+const openMapillary = (coordinates) => {
+  streetViewCoords.value = coordinates;
+  showStreetView.value = true;
+};
+
+const startMarker = ref(null);
+const endMarker = ref(null);
+const allPolylines = ref([]);
+
+const clearMapObjects = () => {
+  console.log(
+    "Clearing map objects. Polylines count:",
+    allPolylines.value.length
+  );
+
+  if (startMarker.value) {
+    startMarker.value.remove();
+    startMarker.value = null;
+  }
+  if (endMarker.value) {
+    endMarker.value.remove();
+    endMarker.value = null;
+  }
+
+  // Remove polylines with explicit checking
+  allPolylines.value.forEach((polyline, index) => {
+    if (polyline && typeof polyline.remove === "function") {
+      polyline.remove();
+      console.log(`Removed polyline ${index}`);
+    } else {
+      console.warn(`Failed to remove polyline ${index}:`, polyline);
+    }
+  });
+
+  // Also try to remove any polylines directly from the map as a fallback
+  if (mapStore.mapInstance) {
+    mapStore.mapInstance.eachLayer((layer) => {
+      if (layer instanceof L.Polyline && !(layer instanceof L.Polygon)) {
+        mapStore.mapInstance.removeLayer(layer);
+        console.log("Removed a polyline layer directly from map");
+      }
+    });
+  }
+
+  allPolylines.value = [];
+};
+
 const handleFindBestRoute = async () => {
   console.log(
     "Finding best route from:",
@@ -46,11 +101,12 @@ const handleFindBestRoute = async () => {
 
   loading.value = true;
   try {
-    // Use map from store
+    clearMapObjects();
+
     const result = await findBestRoute(
       props.startCoords,
       props.destinationCoords,
-      mapStore.mapInstance // Use the map from the store
+      mapStore.mapInstance
     );
 
     if (result) {
@@ -58,6 +114,17 @@ const handleFindBestRoute = async () => {
       routeOptions.value = result.allOptions || [];
       selectedRouteIndex.value = 0;
       console.log("Best route found:", bestRoute.value);
+
+      if (result.directRoute && result.directRoute.polyline) {
+        allPolylines.value.push(result.directRoute.polyline);
+      }
+
+      createMarkers(
+        result.directRoute.startCoords ||
+          props.startCoords.split(",").map(Number),
+        result.directRoute.endCoords ||
+          props.destinationCoords.split(",").map(Number)
+      );
     } else {
       bestRoute.value = null;
       routeOptions.value = [];
@@ -100,6 +167,31 @@ const formatTime = (minutes) => {
   const hours = Math.floor(minutes / 60);
   const mins = minutes % 60;
   return `${hours}h ${mins}min`;
+};
+
+// Modified createMarkers function
+const createMarkers = (start, end) => {
+  // Create new markers
+  startMarker.value = L.marker([start[1], start[0]], {
+    icon: L.divIcon({
+      className: "start-marker",
+      html: '<div style="background-color:#33cc33;width:12px;height:12px;border-radius:50%;border:2px solid white;"></div>',
+      iconSize: [12, 12],
+    }),
+  })
+    .addTo(mapStore.mapInstance)
+    .bindTooltip("Start");
+
+  endMarker.value = L.marker([end[1], end[0]], {
+    icon: L.divIcon({
+      className: "end-marker",
+      html: '<div style="background-color:#ff3333;width:12px;height:12px;border-radius:50%;border:2px solid white;"></div>',
+      iconSize: [12, 12],
+    }),
+  })
+    .addTo(mapStore.mapInstance)
+    .bindTooltip("Destination (Click for Street View)")
+    .on("click", () => openMapillary(end));
 };
 </script>
 
@@ -231,6 +323,11 @@ const formatTime = (minutes) => {
         No route found. Click 'Find Best Route' to search for routes.
       </div>
     </v-card>
+    <ImprovedMapillaryViewer
+      v-model:visible="showStreetView"
+      :coordinates="streetViewCoords"
+      @close="showStreetView = false"
+    />
   </v-container>
 </template>
 
