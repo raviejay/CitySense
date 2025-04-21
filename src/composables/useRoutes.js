@@ -412,7 +412,7 @@ export function useRoutes() {
 
       // Create nodes for key points on each route (start, end, and some intermediate points)
       // We don't need a node for every coordinate to keep the graph manageable
-      const samplingRate = Math.max(1, Math.floor(useCoords.length / 10)); // Sample ~10 points
+      const samplingRate = Math.max(1, Math.floor(useCoords.length / 20)); // Sample ~10 points
 
       for (let i = 0; i < useCoords.length; i += samplingRate) {
         const nodeId = `${route.name}_${i}`;
@@ -709,6 +709,7 @@ export function useRoutes() {
         const DISTANCE_WEIGHT = 0.4;
         const FARE_WEIGHT = 0.3;
         const TRANSFER_WEIGHT = 0.3;
+        const TRANSFER_PENALTY = 0.5;
 
         // Normalize scores
         const normalizedDistance = distance / 5000; // Normalized to 5km
@@ -718,7 +719,8 @@ export function useRoutes() {
         const edgeCost =
           DISTANCE_WEIGHT * normalizedDistance +
           FARE_WEIGHT * normalizedFare +
-          TRANSFER_WEIGHT * normalizedTransfer;
+          TRANSFER_WEIGHT * normalizedTransfer +
+          (edge.isTransfer ? TRANSFER_PENALTY : 0);
 
         const tentativeGScore = gScore[current] + edgeCost;
 
@@ -767,6 +769,7 @@ export function useRoutes() {
     let totalDistance = 0;
     let totalFare = 0;
     const transferDistances = [];
+    const stepFares = []; // Array to track fares for each step
 
     // Reconstruct the path by following cameFrom
     while (cameFrom[current]) {
@@ -797,11 +800,8 @@ export function useRoutes() {
           if (edge.routeType === "PUJ") {
             // For PUJ, we need to recalculate the total fare for the entire distance
             lastStep.fare = calculatePUJFare(lastStep.distance);
-          } else {
-            // For tricycles, just add the fixed fare if it's a new segment
-            // (but since we're extending, we shouldn't add more fare)
-            // Tricycle fare is typically per ride, not per distance
           }
+          // For tricycles, fare remains the same when extending
         } else {
           // Add new step
           const stepFare =
@@ -809,7 +809,7 @@ export function useRoutes() {
               ? calculatePUJFare(edge.distance)
               : edge.fare;
 
-          steps.push({
+          const newStep = {
             mode: edge.routeType,
             routeName: edge.routeName,
             start: fromNode.point,
@@ -822,7 +822,9 @@ export function useRoutes() {
               edge.routeType === "PUJ"
                 ? "Public Utility Jeepney Route"
                 : "Tricycle Route",
-          });
+          };
+          steps.push(newStep);
+          stepFares.push(stepFare); // Track the fare for this step
         }
 
         totalDistance += edge.distance;
@@ -846,6 +848,7 @@ export function useRoutes() {
 
     // The path array goes from end to start, so we need to reverse it
     steps.reverse();
+    stepFares.reverse(); // Reverse to match steps order
 
     // For PUJ routes, ensure total fare matches the step's calculated fare
     if (steps.length === 1 && steps[0].mode === "PUJ") {
@@ -866,6 +869,7 @@ export function useRoutes() {
     return {
       type: routeType,
       steps: steps,
+      stepFares: stepFares, // Add the fare breakdown
       totalDistance: totalDistance,
       totalFare: totalFare,
       transferDistances: transferDistances,
@@ -1051,26 +1055,26 @@ export function useRoutes() {
       }
     });
 
-    // Add markers for transfer points
-    if (route.transferPoints && route.transferPoints.length > 0) {
-      route.transferPoints.forEach((transferPoint, index) => {
-        const fromRoute = route.steps[index].routeName;
-        const toRoute = route.steps[index + 1].routeName;
+    // // Add markers for transfer points
+    // if (route.transferPoints && route.transferPoints.length > 0) {
+    //   route.transferPoints.forEach((transferPoint, index) => {
+    //     const fromRoute = route.steps[index].routeName;
+    //     const toRoute = route.steps[index + 1].routeName;
 
-        L.marker([transferPoint.point1[1], transferPoint.point1[0]], {
-          icon: L.divIcon({
-            className: "transfer-marker",
-            html: '<div style="background-color:#ff6b6b;width:14px;height:14px;border-radius:50%;border:2px solid white;"></div>',
-            iconSize: [14, 14],
-          }),
-        })
-          .addTo(mapInstance)
-          .bindTooltip(
-            `Transfer ${index + 1}: ${fromRoute} → ${toRoute}<br>` +
-              `Distance: ${Math.round(transferPoint.distance)}m`
-          );
-      });
-    }
+    //     L.marker([transferPoint.point1[1], transferPoint.point1[0]], {
+    //       icon: L.divIcon({
+    //         className: "transfer-marker",
+    //         html: '<div style="background-color:#ff6b6b;width:14px;height:14px;border-radius:50%;border:2px solid white;"></div>',
+    //         iconSize: [14, 14],
+    //       }),
+    //     })
+    //       .addTo(mapInstance)
+    //       .bindTooltip(
+    //         `Transfer ${index + 1}: ${fromRoute} → ${toRoute}<br>` +
+    //           `Distance: ${Math.round(transferPoint.distance)}m`
+    //       );
+    //   });
+    // }
   };
 
   // First, I'll add a function to get the driving route from OpenRouteService
@@ -1179,6 +1183,7 @@ export function useRoutes() {
     return {
       name: formatRouteName(routeResult.bestRoute),
       steps: routeResult.bestRoute.steps,
+      stepFares: routeResult.bestRoute.stepFares, // Add this line
       totalDistance: Math.round(routeResult.bestRoute.totalDistance),
       totalFare: routeResult.bestRoute.totalFare,
       estimatedTime: calculateEstimatedTime(routeResult.bestRoute),
@@ -1197,11 +1202,39 @@ export function useRoutes() {
     };
   };
 
+  const drawCalculatedRoute = async (mapInstance, coordinates) => {
+    if (!mapInstance || !coordinates || coordinates.length === 0) return;
+
+    try {
+      const response = await orsDirections.calculate({
+        coordinates: coordinates,
+        profile: "driving-car",
+        format: "geojson",
+      });
+
+      const routedCoords = response.features[0].geometry.coordinates;
+      const latlngs = routedCoords.map((coord) => [coord[1], coord[0]]);
+
+      const polyline = L.polyline(latlngs, {
+        color: "blue",
+        weight: 4,
+        opacity: 0.5,
+      }).addTo(mapInstance);
+      mapInstance.fitBounds(polyline.getBounds());
+
+      return polyline;
+    } catch (error) {
+      console.error("Error calculating route:", error);
+    }
+  };
+
   return {
     loadRoutes,
     findBestRoute,
-    findBestRouteWithAStar, // Expose the A* implementation
-    drawDirectRoute, // Export the new function
-    getDrivingRoute, // Export this utility function as well
+    findBestRouteWithAStar,
+    drawDirectRoute,
+    getDrivingRoute,
+    formatRouteName,
+    drawCalculatedRoute,
   };
 }

@@ -42,17 +42,17 @@ const setActiveView = (view) => {
       class="bg-white"
     >
       <v-btn value="search" @click="setActiveView('search')">
-        <v-icon>mdi-magnify</v-icon>
+        <v-icon color="#03045e">mdi-magnify</v-icon>
         <span>Search</span>
       </v-btn>
 
       <v-btn value="route" @click="setActiveView('route')">
-        <v-icon>mdi-map-marker-path</v-icon>
+        <v-icon color="#03045e">mdi-map-marker-path</v-icon>
         <span>Route</span>
       </v-btn>
 
       <v-btn value="settings" @click="setActiveView('settings')">
-        <v-icon>mdi-cog</v-icon>
+        <v-icon color="#03045e">mdi-cog</v-icon>
         <span>Settings</span>
       </v-btn>
     </v-bottom-navigation>

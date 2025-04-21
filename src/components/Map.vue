@@ -5,6 +5,8 @@ import "leaflet/dist/leaflet.css";
 import { useRoutes } from "@/composables/useRoutes";
 import { useMapStore } from "@/stores/mapStore";
 
+const maptilerApiKey = "SBAyjg2QZffT0exJjurD"; // ✅ Replace with your actual API key
+
 const mapStore = useMapStore();
 const mapContainer = ref(null);
 const clickCount = ref(0);
@@ -16,28 +18,30 @@ const { loadRoutes } = useRoutes();
 
 // Initialize the map
 onMounted(() => {
-  // Define Butuan City boundaries (southwest and northeast corners)
-  // Added some padding to make sure the entire city is visible
   const southWest = L.latLng(8.8464, 125.3792);
   const northEast = L.latLng(9.0464, 125.5792);
   const bounds = L.latLngBounds(southWest, northEast);
 
-  // Create map with restrictions
   const map = L.map(mapContainer.value, {
     center: [8.946048723670792, 125.54603354770742],
     zoom: 14,
-    maxBounds: bounds.pad(0.4), // Add padding to bounds to allow dragging to edges
-    minZoom: 12, // Restrict zooming out beyond this level
-    maxZoom: 18, // Optional: restrict maximum zoom in level
+    maxBounds: bounds.pad(0.4),
+    minZoom: 12,
+    maxZoom: 18,
   });
 
-  L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
-    attribution: "&copy; OpenStreetMap contributors",
-  }).addTo(map);
+  // ✅ Use Positron style from MapTiler
+  L.tileLayer(
+    `https://api.maptiler.com/maps/positron/{z}/{x}/{y}.png?key=${maptilerApiKey}`,
+    {
+      attribution:
+        '&copy; <a href="https://www.maptiler.com/">MapTiler</a> &copy; <a href="https://www.openstreetmap.org/">OpenStreetMap</a> contributors',
+      tileSize: 512,
+      zoomOffset: -1,
+    }
+  ).addTo(map);
 
-  // Store map in Pinia
   mapStore.setMapInstance(map);
-
   loadRoutes(map);
   map.on("click", onMapClick);
 });
@@ -51,8 +55,6 @@ const onMapClick = (event) => {
     destinationCoords.value = `${lng}, ${lat}`;
   }
   clickCount.value = (clickCount.value + 1) % 2;
-
-  // Send updated coordinates to the parent
   emit("updateCoords", startCoords.value, destinationCoords.value);
 };
 </script>
