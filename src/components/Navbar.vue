@@ -1,11 +1,12 @@
 <script setup>
 import { ref } from "vue";
-
 import RouteView from "@/components/RouteView.vue";
 import SettingsView from "@/components/SettingsView.vue";
 import Searchs from "./Searchs.vue";
 
-const activeView = ref("search"); // Default to Search
+const activeView = ref("search");
+
+const emit = defineEmits(["updateCoords", "clearCoords", "setActiveField"]);
 
 defineProps({
   startCoords: String,
@@ -19,11 +20,13 @@ const setActiveView = (view) => {
 
 <template>
   <div>
-    <!-- Dynamic Content -->
     <div v-if="activeView === 'search'">
       <Searchs
         :startCoords="startCoords"
         :destinationCoords="destinationCoords"
+        @update-coords="(s, d) => emit('updateCoords', s, d)"
+        @clear-coords="(type) => emit('clearCoords', type)"
+        @set-active-field="(field) => emit('setActiveField', field)"
       />
     </div>
     <div v-if="activeView === 'route'">
@@ -33,7 +36,6 @@ const setActiveView = (view) => {
       <SettingsView />
     </div>
 
-    <!-- Bottom Navigation -->
     <v-bottom-navigation
       v-model="activeView"
       app
@@ -60,7 +62,6 @@ const setActiveView = (view) => {
 </template>
 
 <style scoped>
-/* Custom style for the active button */
 .v-bottom-navigation .v-btn--active {
   position: relative;
 }
@@ -68,11 +69,11 @@ const setActiveView = (view) => {
 .v-bottom-navigation .v-btn--active::before {
   content: "";
   position: absolute;
-  top: 0; /* Position the line above the icon */
-  left: 50%; /* Center the line */
-  transform: translateX(-50%); /* Center the line */
-  width: 60%; /* Width of the line */
-  height: 3px; /* Height of the line */
-  background-color: #448aff; /* Color of the line */
+  top: 0;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 60%;
+  height: 3px;
+  background-color: #448aff;
 }
 </style>

@@ -1,19 +1,21 @@
 <script setup>
-import { ref, onMounted, defineEmits } from "vue";
+import { ref, onMounted, watch } from "vue";
 import L from "leaflet";
 import "leaflet/dist/leaflet.css";
 import { useRoutes } from "@/composables/useRoutes";
 import { useMapStore } from "@/stores/mapStore";
 
-const maptilerApiKey = "SBAyjg2QZffT0exJjurD"; // ✅ Replace with your actual API key
+const props = defineProps({
+  startCoords: String,
+  destinationCoords: String,
+  activeInputField: String,
+});
 
-const mapStore = useMapStore();
-const mapContainer = ref(null);
-const clickCount = ref(0);
-const startCoords = ref("");
-const destinationCoords = ref("");
 const emit = defineEmits(["updateCoords"]);
 
+const maptilerApiKey = "SBAyjg2QZffT0exJjurD";
+const mapStore = useMapStore();
+const mapContainer = ref(null);
 const { loadRoutes } = useRoutes();
 
 // Initialize the map
@@ -30,33 +32,76 @@ onMounted(() => {
     maxZoom: 18,
   });
 
-  // ✅ Use Positron style from MapTiler
-  L.tileLayer(
-    `https://api.maptiler.com/maps/positron/{z}/{x}/{y}.png?key=${maptilerApiKey}`,
-    {
-      attribution:
-        '&copy; <a href="https://www.maptiler.com/">MapTiler</a> &copy; <a href="https://www.openstreetmap.org/">OpenStreetMap</a> contributors',
-      tileSize: 512,
-      zoomOffset: -1,
-    }
-  ).addTo(map);
-
   mapStore.setMapInstance(map);
+  mapStore.updateMapStyle();
   loadRoutes(map);
-  map.on("click", onMapClick);
+
+  // Handle map clicks based on active input field
+  map.on("click", (event) => {
+    const { lat, lng } = event.latlng;
+    const coords = `${lng}, ${lat}`;
+
+    if (props.activeInputField === "start") {
+      emit("updateCoords", coords, undefined, "start");
+    } else if (props.activeInputField === "destination") {
+      emit("updateCoords", undefined, coords, "destination");
+    } else {
+      // Default behavior when no field is active
+      if (!props.startCoords) {
+        emit("updateCoords", coords, undefined, "start");
+      } else if (!props.destinationCoords) {
+        emit("updateCoords", undefined, coords, "destination");
+      } else {
+        // Both fields have values - reset and start with start field
+        emit("updateCoords", coords, "", "start");
+      }
+    }
+  });
 });
 
-// Handle map clicks to set start/destination
-const onMapClick = (event) => {
-  const { lat, lng } = event.latlng;
-  if (clickCount.value === 0) {
-    startCoords.value = `${lng}, ${lat}`;
-  } else {
-    destinationCoords.value = `${lng}, ${lat}`;
-  }
-  clickCount.value = (clickCount.value + 1) % 2;
-  emit("updateCoords", startCoords.value, destinationCoords.value);
-};
+// // Watch for changes in coordinates to update markers
+// watch(
+//   () => [props.startCoords, props.destinationCoords],
+//   ([newStart, newDest]) => {
+//     // Clear existing markers
+//     if (mapStore.startMarker) {
+//       mapStore.startMarker.remove();
+//     }
+//     if (mapStore.endMarker) {
+//       mapStore.endMarker.remove();
+//     }
+
+//     // Add new markers if coordinates exist
+//     if (newStart) {
+//       const [lng, lat] = newStart.split(",").map(Number);
+//       mapStore.startMarker = L.marker([lat, lng], {
+//         icon: L.divIcon({
+//           className: "start-marker",
+//           html: `<div style="color: #00B4D8; font-size: 24px;"><i class="mdi mdi-map-marker-radius"></i></div>`,
+//           iconSize: [24, 24],
+//           iconAnchor: [12, 24],
+//         }),
+//       })
+//         .addTo(mapStore.mapInstance)
+//         .bindTooltip("Start");
+//     }
+
+//     if (newDest) {
+//       const [lng, lat] = newDest.split(",").map(Number);
+//       mapStore.endMarker = L.marker([lat, lng], {
+//         icon: L.divIcon({
+//           className: "end-marker",
+//           html: `<div style="color: #03045E; font-size: 24px;"><i class="mdi mdi-map-marker"></i></div>`,
+//           iconSize: [26, 26],
+//           iconAnchor: [12, 24],
+//         }),
+//       })
+//         .addTo(mapStore.mapInstance)
+//         .bindTooltip("Destination");
+//     }
+//   },
+//   { immediate: true }
+// );
 </script>
 
 <template>

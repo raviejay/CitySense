@@ -1,10 +1,12 @@
 <script setup>
-import { ref } from "vue";
+import { ref, watch } from "vue";
+import { useMapStore } from "@/stores/mapStore";
+
+const mapStore = useMapStore();
 
 const themeOptions = [
   { value: "light", label: "Light", icon: "mdi-weather-sunny" },
   { value: "dark", label: "Dark", icon: "mdi-weather-night" },
-  { value: "blue", label: "Blue", icon: "mdi-palette", color: "#2196F3" },
 ];
 
 const mapStyleOptions = [
@@ -14,7 +16,12 @@ const mapStyleOptions = [
 ];
 
 const currentTheme = ref("light");
-const currentMapStyle = ref("standard");
+const currentMapStyle = ref(mapStore.currentMapStyle);
+
+// Watch for changes to map style and update the store
+watch(currentMapStyle, (newStyle) => {
+  mapStore.setMapStyle(newStyle);
+});
 </script>
 
 <template>
@@ -72,10 +79,10 @@ const currentMapStyle = ref("standard");
           color="#2196F3"
           :menu-props="{ maxHeight: '200' }"
         >
-          <template v-slot:item="{ props }">
+          <template v-slot:item="{ props, item }">
             <v-list-item v-bind="props">
               <template v-slot:prepend>
-                <v-icon :icon="props.item.raw.icon" color="#2196F3"></v-icon>
+                <v-icon :icon="item.icon" color="#2196F3"></v-icon>
               </template>
             </v-list-item>
           </template>
@@ -250,6 +257,4 @@ const currentMapStyle = ref("standard");
   letter-spacing: normal;
   border-color: #2196f3;
 }
-
-/* Remove dark mode override since we want consistent light blue background */
 </style>

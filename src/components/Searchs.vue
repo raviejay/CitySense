@@ -14,15 +14,6 @@ const googleMapsApiKey = "AIzaSyDXcJ66_US3pJQesji2iK7aIYHCW0gsEa4";
 const { findBestRoute, formatRouteName } = useRoutes();
 const expanded = ref(false);
 const activeTab = ref("suggested");
-const emit = defineEmits(["updateCoords"]);
-
-// Search functionality
-const searchQueryStart = ref("");
-const searchQueryDestination = ref("");
-const startSuggestions = ref([]);
-const destinationSuggestions = ref([]);
-const showStartSuggestions = ref(false);
-const showDestinationSuggestions = ref(false);
 
 // Track which field is active for map clicks
 const activeInputField = ref(null); // 'start' or 'destination'
@@ -32,49 +23,69 @@ const props = defineProps({
   destinationCoords: String,
 });
 
-const userStart = ref(props.startCoords);
-const userDestination = ref(props.destinationCoords);
+const emit = defineEmits(["updateCoords", "clearCoords", "setActiveField"]);
 
+// Remove local state for coordinates and use props directly
+const searchQueryStart = ref("");
+const searchQueryDestination = ref("");
+const startSuggestions = ref([]);
+const destinationSuggestions = ref([]);
+const showStartSuggestions = ref(false);
+const showDestinationSuggestions = ref(false);
+
+// Watch for coordinate changes to update search queries (unchanged)
 watch(
-  [() => props.startCoords, () => props.destinationCoords],
-  ([newStart, newDest]) => {
-    if (newStart) {
-      userStart.value = newStart;
-      // Find establishment name if coordinates match
+  () => props.startCoords,
+  (newCoords) => {
+    if (newCoords) {
       const startEst = butuanEstablishments.find((est) => {
         const [lat, lng] = est.coords.split(",").map((c) => c.trim());
-        return `${lng}, ${lat}` === newStart;
+        return `${lng}, ${lat}` === newCoords;
       });
       searchQueryStart.value = startEst
         ? startEst.name
-        : formatPlaceName(newStart);
+        : formatPlaceName(newCoords);
+    } else {
+      searchQueryStart.value = "";
     }
-    if (newDest) {
-      userDestination.value = newDest;
-      // Find establishment name if coordinates match
+  },
+  { immediate: true } // Added to handle initial values
+);
+
+watch(
+  () => props.destinationCoords,
+  (newCoords) => {
+    if (newCoords) {
       const destEst = butuanEstablishments.find((est) => {
         const [lat, lng] = est.coords.split(",").map((c) => c.trim());
-        return `${lng}, ${lat}` === newDest;
+        return `${lng}, ${lat}` === newCoords;
       });
       searchQueryDestination.value = destEst
         ? destEst.name
-        : formatPlaceName(newDest);
+        : formatPlaceName(newCoords);
+    } else {
+      searchQueryDestination.value = "";
     }
-  }
+  },
+  { immediate: true } // Added to handle initial values
 );
 
-// Watch for changes in search queries
+// Updated: Watch for changes in search queries to clear coordinates
 watch(searchQueryStart, (newQuery) => {
   if (!newQuery) {
-    userStart.value = "";
-    emit("updateCoords", "", userDestination.value);
+    // Changed from userStart.value to props.startCoords
+    if (props.startCoords) {
+      emit("updateCoords", "", props.destinationCoords);
+    }
   }
 });
 
 watch(searchQueryDestination, (newQuery) => {
   if (!newQuery) {
-    userDestination.value = "";
-    emit("updateCoords", userStart.value, "");
+    // Changed from userDestination.value to props.destinationCoords
+    if (props.destinationCoords) {
+      emit("updateCoords", props.startCoords, "");
+    }
   }
 });
 
@@ -103,38 +114,37 @@ const searchEstablishments = (query, type) => {
   }
 };
 
+// Modified selectEstablishment to use emit
 const selectEstablishment = (est, type) => {
   const [lat, lng] = est.coords.split(",").map((coord) => coord.trim());
   const coords = `${lng}, ${lat}`;
 
   if (type === "start") {
-    userStart.value = coords;
     searchQueryStart.value = est.name;
     showStartSuggestions.value = false;
-    emit("updateCoords", coords, props.destinationCoords || "");
+    emit("updateCoords", coords, props.destinationCoords);
   } else {
-    userDestination.value = coords;
     searchQueryDestination.value = est.name;
     showDestinationSuggestions.value = false;
-    emit("updateCoords", props.startCoords || "", coords);
+    emit("updateCoords", props.startCoords, coords);
   }
-  activeInputField.value = null; // Reset active field after selection
+  emit("setActiveField", null);
 };
 
+// Modified clearInput to use emit
 const clearInput = (type) => {
   if (type === "start") {
-    userStart.value = "";
     searchQueryStart.value = "";
-    emit("updateCoords", "", props.destinationCoords);
+    emit("clearCoords", "start");
   } else {
-    userDestination.value = "";
     searchQueryDestination.value = "";
-    emit("updateCoords", props.startCoords, "");
+    emit("clearCoords", "destination");
   }
 };
 
+// Modified onFocusInput to track active field
 const onFocusInput = (type) => {
-  activeInputField.value = type;
+  emit("setActiveField", type);
   if (type === "start") {
     showStartSuggestions.value = true;
     if (searchQueryStart.value) {
@@ -209,9 +219,10 @@ const handleFindBestRoute = async () => {
   try {
     clearMapObjects();
 
+    // Use props.startCoords and props.destinationCoords instead of local state
     const result = await findBestRoute(
-      userStart.value,
-      userDestination.value,
+      props.startCoords, // Changed from userStart.value
+      props.destinationCoords, // Changed from userDestination.value
       mapStore.mapInstance
     );
 
@@ -227,10 +238,12 @@ const handleFindBestRoute = async () => {
 
       createMarkers(
         result.directRoute.startCoords ||
-          (userStart.value ? userStart.value.split(",").map(Number) : [0, 0]),
+          (props.startCoords
+            ? props.startCoords.split(",").map(Number)
+            : [0, 0]),
         result.directRoute.endCoords ||
-          (userDestination.value
-            ? userDestination.value.split(",").map(Number)
+          (props.destinationCoords
+            ? props.destinationCoords.split(",").map(Number)
             : [0, 0])
       );
     } else {
@@ -286,8 +299,13 @@ const createMarkers = (start, end) => {
   startMarker.value = L.marker([start[1], start[0]], {
     icon: L.divIcon({
       className: "start-marker",
-      html: '<div style="background-color:#00B4D8;width:12px;height:12px;border-radius:50%;border:2px solid white;"></div>',
-      iconSize: [12, 12],
+      html: `
+        <div style="color: #00B4D8; font-size: 24px;">
+          <i class="mdi mdi-map-marker-radius"></i>
+        </div>
+      `,
+      iconSize: [24, 24],
+      iconAnchor: [12, 24],
     }),
   })
     .addTo(mapStore.mapInstance)
@@ -296,8 +314,13 @@ const createMarkers = (start, end) => {
   endMarker.value = L.marker([end[1], end[0]], {
     icon: L.divIcon({
       className: "end-marker",
-      html: '<div style="background-color:#03045E;width:12px;height:12px;border-radius:50%;border:2px solid white;"></div>',
-      iconSize: [12, 12],
+      html: `
+        <div style="color: #03045E; font-size: 24px;">
+          <i class="mdi mdi-map-marker"></i>
+        </div>
+      `,
+      iconSize: [26, 26],
+      iconAnchor: [12, 24],
     }),
   })
     .addTo(mapStore.mapInstance)
@@ -354,16 +377,16 @@ const currentRoute = computed(() => {
       <div class="handle-bar"></div>
     </div>
 
-    <v-container class="pa-4 pt-0">
+    <v-container class="pa-4 pt-0 panel-content">
       <v-sheet class="location-inputs mb-4" rounded elevation="1">
         <v-row no-gutters class="p-2">
           <v-col
             cols="1"
             class="d-flex flex-column justify-space-between align-center py-2"
           >
-            <v-icon color="#00B4D8" size="small">mdi-circle</v-icon>
+            <v-icon color="#00B4D8" size="small">mdi-map-marker-radius</v-icon>
             <v-divider vertical class="mx-auto my-1"></v-divider>
-            <v-icon color="#00B4D8" size="small">mdi-transit-connection</v-icon>
+            <v-icon color="#90e0ef" size="small">mdi-transit-connection</v-icon>
             <v-divider vertical class="mx-auto my-1"></v-divider>
             <v-icon color="#03045E">mdi-map-marker</v-icon>
           </v-col>
@@ -386,7 +409,8 @@ const currentRoute = computed(() => {
                     v-if="searchQueryStart"
                     size="small"
                     color="#03045E"
-                    @click="clearInput('start')"
+                    class="close-btn"
+                    @click.stop="clearInput('start')"
                   >
                     mdi-close-circle
                   </v-icon>
@@ -434,7 +458,8 @@ const currentRoute = computed(() => {
                     v-if="searchQueryDestination"
                     size="small"
                     color="#03045E"
-                    @click="clearInput('destination')"
+                    class="close-btn"
+                    @click.stop="clearInput('destination')"
                   >
                     mdi-close-circle
                   </v-icon>
@@ -501,162 +526,15 @@ const currentRoute = computed(() => {
         </div>
       </div>
 
-      <v-sheet
-        v-if="bestRoute && activeTab === 'suggested'"
-        class="route-result"
-        rounded
-      >
-        <v-list density="compact" class="route-list pa-0">
-          <!-- Main route option -->
+      <div class="results-wrapper">
+        <v-sheet
+          v-if="bestRoute && activeTab === 'suggested'"
+          class="route-result"
+          rounded
+        >
+          <v-list density="compact" class="route-list pa-0">
+            <!-- Main route option -->
 
-          <v-list-item :active="true" active-color="#00B4D8">
-            <template v-slot:prepend>
-              <v-avatar color="#CAF0EF" class="mr-2">
-                <v-icon color="#03045E">mdi-transit-connection-variant</v-icon>
-              </v-avatar>
-            </template>
-
-            <v-list-item-title
-              class="d-flex align-center justify-space-between"
-            >
-              <span class="font-weight-medium">{{ bestRoute.name }}</span>
-              <span class="font-weight-bold"> ₱{{ bestRoute.totalFare }} </span>
-            </v-list-item-title>
-
-            <v-list-item-subtitle class="d-flex justify-space-between">
-              <span
-                >{{ formatDistance(bestRoute.totalDistance) }} • Suggested
-                Route</span
-              >
-              <span class="text-caption">{{
-                formatTime(bestRoute.estimatedTime)
-              }}</span>
-            </v-list-item-subtitle>
-          </v-list-item>
-        </v-list>
-
-        <!-- Route details when expanded -->
-        <div v-if="expanded" class="route-details pa-4 mt-2">
-          <v-text class="text-h10 font-weight-bold mb-2" style="color: #03045e">
-            Route Details
-          </v-text>
-
-          <!-- Route steps -->
-          <div class="route-steps">
-            <template v-for="(step, index) in bestRoute.steps" :key="index">
-              <!-- Transportation step -->
-              <div class="step">
-                <div class="step-icon">
-                  <v-avatar size="32" color="#CAF0EF">
-                    <v-icon
-                      :color="step.mode === 'Walk' ? '#007786' : '#03045E'"
-                    >
-                      {{ getTransportIcon(step.mode) }}
-                    </v-icon>
-                  </v-avatar>
-                </div>
-                <div class="step-content">
-                  <div class="step-header">
-                    <strong style="color: #00b4d8">{{ step.mode }}</strong>
-                    <span
-                      v-if="step.routeName"
-                      class="ml-2"
-                      style="color: #00b4d8"
-                      >({{ step.routeName }})</span
-                    >
-                    <span
-                      class="ml-auto"
-                      style="color: #00b4d8; font-weight: 500"
-                    >
-                      ₱{{ step.fare.toFixed(2) }}
-                    </span>
-                  </div>
-                  <div class="step-details">
-                    <span>
-                      {{
-                        step.description ||
-                        `Take ${step.mode} for about ${Math.round(
-                          step.distance / (step.mode === "PUJ" ? 333 : 250)
-                        )} minutes`
-                      }}
-                    </span>
-                    <span class="ml-auto" style="color: #00b4d8">
-                      • ({{ formatDistance(step.distance) }})</span
-                    >
-                  </div>
-                </div>
-              </div>
-            </template>
-          </div>
-
-          <v-divider class="my-3"></v-divider>
-
-          <v-row class="route-summary">
-            <!-- Total Distance - left align -->
-            <v-col cols="4" class="d-flex flex-column">
-              <v-text class="text-caption mb-1" style="color: #03045e">
-                Total Distance
-              </v-text>
-              <v-text
-                class="text-body-1 font-weight-medium"
-                style="color: #00b4d8"
-              >
-                {{ formatDistance(bestRoute.totalDistance) }}
-              </v-text>
-            </v-col>
-
-            <!-- Total Fare - center align -->
-            <v-col cols="4" class="d-flex flex-column align-center">
-              <v-text
-                class="text-caption mb-1 text-center"
-                style="color: #03045e"
-              >
-                Total Fare
-              </v-text>
-              <v-text
-                class="text-body-1 font-weight-medium text-center"
-                style="color: #00b4d8"
-              >
-                ₱{{ bestRoute.totalFare }}
-              </v-text>
-            </v-col>
-
-            <!-- Est. Travel Time - right align -->
-            <v-col cols="4" class="d-flex flex-column align-end">
-              <v-text
-                class="text-caption mb-1 text-right"
-                style="color: #03045e"
-              >
-                Est. Travel Times
-              </v-text>
-              <v-text
-                class="text-body-1 font-weight-medium text-right"
-                style="color: #00b4d8"
-              >
-                {{ formatTime(bestRoute.estimatedTime) }}
-              </v-text>
-            </v-col>
-          </v-row>
-        </div>
-      </v-sheet>
-
-      <!-- Alternative route result -->
-      <v-sheet
-        v-if="bestRoute && activeTab === 'alternative'"
-        class="route-result"
-        rounded
-      >
-        <v-list density="compact" class="route-list pa-0">
-          <template
-            v-for="(route, index) in routeOptions.slice(1)"
-            :key="index"
-          >
-            <v-text
-              class="text-h10 font-weight-bold mb-2"
-              style="color: #03045e"
-            >
-              Option {{ index + 1 }}
-            </v-text>
             <v-list-item :active="true" active-color="#00B4D8">
               <template v-slot:prepend>
                 <v-avatar color="#CAF0EF" class="mr-2">
@@ -669,135 +547,296 @@ const currentRoute = computed(() => {
               <v-list-item-title
                 class="d-flex align-center justify-space-between"
               >
-                <span class="font-weight-medium">{{
-                  formatRouteName(route)
-                }}</span>
-                <span class="font-weight-bold"> ₱{{ route.totalFare }} </span>
+                <span class="font-weight-medium">{{ bestRoute.name }}</span>
+                <span class="font-weight-bold">
+                  ₱{{ bestRoute.totalFare }}
+                </span>
               </v-list-item-title>
 
               <v-list-item-subtitle class="d-flex justify-space-between">
                 <span
-                  >{{ formatDistance(route.totalDistance) }} • Alternative
+                  >{{ formatDistance(bestRoute.totalDistance) }} • Suggested
                   Route</span
                 >
+                <span class="text-caption">{{
+                  formatTime(bestRoute.estimatedTime)
+                }}</span>
               </v-list-item-subtitle>
             </v-list-item>
+          </v-list>
 
-            <!-- Route details when expanded -->
-            <div v-if="expanded" class="route-details pa-4 mt-2">
-              <div
+          <!-- Route details when expanded -->
+          <div v-if="expanded" class="route-details pa-8 mb-10">
+            <v-text
+              class="text-h10 font-weight-bold mb-2"
+              style="color: #03045e"
+            >
+              Route Details
+            </v-text>
+
+            <!-- Route steps -->
+            <div class="route-steps">
+              <template v-for="(step, index) in bestRoute.steps" :key="index">
+                <!-- Transportation step -->
+                <div class="step">
+                  <div class="step-icon">
+                    <v-avatar size="32" color="#CAF0EF">
+                      <v-icon
+                        :color="step.mode === 'Walk' ? '#007786' : '#03045E'"
+                      >
+                        {{ getTransportIcon(step.mode) }}
+                      </v-icon>
+                    </v-avatar>
+                  </div>
+                  <div class="step-content">
+                    <div class="step-header">
+                      <strong style="color: #00b4d8">{{ step.mode }}</strong>
+                      <span
+                        v-if="step.routeName"
+                        class="ml-2"
+                        style="color: #00b4d8"
+                        >({{ step.routeName }})</span
+                      >
+                      <span
+                        class="ml-auto"
+                        style="color: #00b4d8; font-weight: 500"
+                      >
+                        ₱{{ step.fare.toFixed(2) }}
+                      </span>
+                    </div>
+                    <div class="step-details">
+                      <span>
+                        {{
+                          step.description ||
+                          `Take ${step.mode} for about ${Math.round(
+                            step.distance / (step.mode === "PUJ" ? 333 : 250)
+                          )} minutes`
+                        }}
+                      </span>
+                      <span class="ml-auto" style="color: #00b4d8">
+                        • ({{ formatDistance(step.distance) }})</span
+                      >
+                    </div>
+                  </div>
+                </div>
+              </template>
+            </div>
+
+            <v-divider class="my-2"></v-divider>
+
+            <v-row class="route-summary">
+              <!-- Total Distance - left align -->
+              <v-col cols="4" class="d-flex flex-column">
+                <v-text class="text-caption mb-1" style="color: #03045e">
+                  Total Distance
+                </v-text>
+                <v-text
+                  class="text-body-1 font-weight-medium"
+                  style="color: #00b4d8"
+                >
+                  {{ formatDistance(bestRoute.totalDistance) }}
+                </v-text>
+              </v-col>
+
+              <!-- Total Fare - center align -->
+              <v-col cols="4" class="d-flex flex-column align-center">
+                <v-text
+                  class="text-caption mb-1 text-center"
+                  style="color: #03045e"
+                >
+                  Total Fare
+                </v-text>
+                <v-text
+                  class="text-body-1 font-weight-medium text-center"
+                  style="color: #00b4d8"
+                >
+                  ₱{{ bestRoute.totalFare }}
+                </v-text>
+              </v-col>
+
+              <!-- Est. Travel Time - right align -->
+              <v-col cols="4" class="d-flex flex-column align-end">
+                <v-text
+                  class="text-caption mb-1 text-right"
+                  style="color: #03045e"
+                >
+                  Est. Travel Times
+                </v-text>
+                <v-text
+                  class="text-body-1 font-weight-medium text-right"
+                  style="color: #00b4d8"
+                >
+                  {{ formatTime(bestRoute.estimatedTime) }}
+                </v-text>
+              </v-col>
+            </v-row>
+          </div>
+        </v-sheet>
+
+        <!-- Alternative route result -->
+        <v-sheet
+          v-if="bestRoute && activeTab === 'alternative'"
+          class="route-result"
+          rounded
+        >
+          <v-list density="compact" class="route-list pa-0">
+            <template
+              v-for="(route, index) in routeOptions.slice(1)"
+              :key="index"
+            >
+              <v-text
                 class="text-h10 font-weight-bold mb-2"
                 style="color: #03045e"
               >
-                Route Details
-              </div>
-
-              <!-- Route steps -->
-              <div class="route-steps">
-                <template
-                  v-for="(step, stepIndex) in route.steps"
-                  :key="stepIndex"
-                >
-                  <!-- Transportation step -->
-                  <div class="step">
-                    <div class="step-icon">
-                      <v-avatar size="32" color="#CAF0EF">
-                        <v-icon
-                          :color="step.mode === 'Walk' ? '#007786' : '#03045E'"
-                        >
-                          {{ getTransportIcon(step.mode) }}
-                        </v-icon>
-                      </v-avatar>
-                    </div>
-                    <div class="step-content">
-                      <div class="step-header">
-                        <strong style="color: #00b4d8">{{ step.mode }}</strong>
-                        <span
-                          v-if="step.routeName"
-                          class="ml-2"
-                          style="color: #00b4d8"
-                          >({{ step.routeName }})</span
-                        >
-                        <span
-                          class="ml-auto"
-                          style="color: #00b4d8; font-weight: 500"
-                        >
-                          ₱{{
-                            step.fare?.toFixed(2) ||
-                            stepFares[stepIndex]?.toFixed(2)
-                          }}
-                        </span>
-                      </div>
-                      <div class="step-details">
-                        <span>
-                          {{
-                            step.description ||
-                            `Take ${step.mode} for about ${Math.round(
-                              step.distance / (step.mode === "PUJ" ? 333 : 250)
-                            )} minutes`
-                          }}
-                        </span>
-                        <span class="ml-auto" style="color: #00b4d8">
-                          • ({{ formatDistance(step.distance) }})</span
-                        >
-                      </div>
-                    </div>
-                  </div>
+                Option {{ index + 1 }}
+              </v-text>
+              <v-list-item :active="true" active-color="#00B4D8">
+                <template v-slot:prepend>
+                  <v-avatar color="#CAF0EF" class="mr-2">
+                    <v-icon color="#03045E"
+                      >mdi-transit-connection-variant</v-icon
+                    >
+                  </v-avatar>
                 </template>
+
+                <v-list-item-title
+                  class="d-flex align-center justify-space-between"
+                >
+                  <span class="font-weight-medium">{{
+                    formatRouteName(route)
+                  }}</span>
+                  <span class="font-weight-bold"> ₱{{ route.totalFare }} </span>
+                </v-list-item-title>
+
+                <v-list-item-subtitle class="d-flex justify-space-between">
+                  <span
+                    >{{ formatDistance(route.totalDistance) }} • Alternative
+                    Route</span
+                  >
+                </v-list-item-subtitle>
+              </v-list-item>
+
+              <!-- Route details when expanded -->
+              <div v-if="expanded" class="route-details pa-4 mt-2">
+                <div
+                  class="text-h10 font-weight-bold mb-2"
+                  style="color: #03045e"
+                >
+                  Route Details
+                </div>
+
+                <!-- Route steps -->
+                <div class="route-steps">
+                  <template
+                    v-for="(step, stepIndex) in route.steps"
+                    :key="stepIndex"
+                  >
+                    <!-- Transportation step -->
+                    <div class="step">
+                      <div class="step-icon">
+                        <v-avatar size="32" color="#CAF0EF">
+                          <v-icon
+                            :color="
+                              step.mode === 'Walk' ? '#007786' : '#03045E'
+                            "
+                          >
+                            {{ getTransportIcon(step.mode) }}
+                          </v-icon>
+                        </v-avatar>
+                      </div>
+                      <div class="step-content">
+                        <div class="step-header">
+                          <strong style="color: #00b4d8">{{
+                            step.mode
+                          }}</strong>
+                          <span
+                            v-if="step.routeName"
+                            class="ml-2"
+                            style="color: #00b4d8"
+                            >({{ step.routeName }})</span
+                          >
+                          <span
+                            class="ml-auto"
+                            style="color: #00b4d8; font-weight: 500"
+                          >
+                            ₱{{
+                              step.fare?.toFixed(2) ||
+                              stepFares[stepIndex]?.toFixed(2)
+                            }}
+                          </span>
+                        </div>
+                        <div class="step-details">
+                          <span>
+                            {{
+                              step.description ||
+                              `Take ${step.mode} for about ${Math.round(
+                                step.distance /
+                                  (step.mode === "PUJ" ? 333 : 250)
+                              )} minutes`
+                            }}
+                          </span>
+                          <span class="ml-auto" style="color: #00b4d8">
+                            • ({{ formatDistance(step.distance) }})</span
+                          >
+                        </div>
+                      </div>
+                    </div>
+                  </template>
+                </div>
+
+                <v-divider class="my-3"></v-divider>
+
+                <!-- <v-row class="route-summary">
+                  Total Distance - left align 
+                  <v-col cols="4" class="d-flex flex-column">
+                    <v-text class="text-caption mb-1" style="color: #03045e">
+                      Total Distance
+                    </v-text>
+                    <v-text
+                      class="text-body-1 font-weight-medium"
+                      style="color: #00b4d8"
+                    >
+                      {{ formatDistance(route.totalDistance) }}
+                    </v-text>
+                  </v-col>
+
+                 
+                  <v-col cols="4" class="d-flex flex-column align-center">
+                    <v-text
+                      class="text-caption mb-1 text-center"
+                      style="color: #03045e"
+                    >
+                      Total Fare
+                    </v-text>
+                    <v-text
+                      class="text-body-1 font-weight-medium text-center"
+                      style="color: #00b4d8"
+                    >
+                      ₱{{ route.totalFare }}
+                    </v-text>
+                  </v-col>
+
+                  
+                  <v-col cols="4" class="d-flex flex-column align-end">
+                    <v-text
+                      class="text-caption mb-1 text-right"
+                      style="color: #03045e"
+                    >
+                      Est. Travel Times
+                    </v-text>
+                    <v-text
+                      class="text-body-1 font-weight-medium text-right"
+                      style="color: #00b4d8"
+                    >
+                      {{ formatTime(route.estimatedTime) }}
+                    </v-text>
+                  </v-col>
+                </v-row> -->
               </div>
-
-              <v-divider class="my-3"></v-divider>
-
-              <!-- <v-row class="route-summary">
-               
-                <v-col cols="4" class="d-flex flex-column">
-                  <v-text class="text-caption mb-1" style="color: #03045e">
-                    Total Distance
-                  </v-text>
-                  <v-text
-                    class="text-body-1 font-weight-medium"
-                    style="color: #00b4d8"
-                  >
-                    {{ formatDistance(route.totalDistance) }}
-                  </v-text>
-                </v-col>
-
-                Total Fare - center align 
-                <v-col cols="4" class="d-flex flex-column align-center">
-                  <v-text
-                    class="text-caption mb-1 text-center"
-                    style="color: #03045e"
-                  >
-                    Total Fare
-                  </v-text>
-                  <v-text
-                    class="text-body-1 font-weight-medium text-center"
-                    style="color: #00b4d8"
-                  >
-                    ₱{{ route.totalFare }}
-                  </v-text>
-                </v-col>
-
-                Est. Travel Time - right align
-                <v-col cols="4" class="d-flex flex-column align-end">
-                  <v-text
-                    class="text-caption mb-1 text-right"
-                    style="color: #03045e"
-                  >
-                    Est. Travel Times
-                  </v-text>
-                  <v-text
-                    class="text-body-1 font-weight-medium text-right"
-                    style="color: #00b4d8"
-                  >
-                    {{ formatTime(route.estimatedTime) }}
-                  </v-text>
-                </v-col> 
-              </v-row> -->
-            </div>
-          </template>
-        </v-list>
-      </v-sheet>
+            </template>
+          </v-list>
+        </v-sheet>
+      </div>
     </v-container>
 
     <!-- Street View Component -->
@@ -820,8 +859,19 @@ const currentRoute = computed(() => {
   background-color: #f5f7fa;
   border-top-left-radius: 20px !important;
   border-top-right-radius: 20px !important;
-  overflow-y: auto;
+  overflow: hidden; /* Changed from overflow-y: auto to prevent scrolling issues */
   transition: max-height 0.3s ease;
+}
+
+.panel-content {
+  height: 100%;
+
+  padding-bottom: 24px; /* Add padding to ensure content isn't cut off */
+}
+
+.results-wrapper {
+  overflow-y: auto;
+  max-height: calc(70vh - 200px); /* Adjust the height as needed */
 }
 
 .panel-expanded {
@@ -836,6 +886,10 @@ const currentRoute = computed(() => {
   justify-content: center;
   align-items: center;
   cursor: pointer;
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  background-color: #f5f7fa;
 }
 
 .handle-bar {
@@ -847,8 +901,10 @@ const currentRoute = computed(() => {
 
 .location-inputs {
   border-radius: 12px;
-  overflow: hidden;
+  overflow: visible;
   background-color: white;
+  position: relative;
+  z-index: 1001;
 }
 
 .location-input :deep(.v-field__input) {
@@ -862,11 +918,15 @@ const currentRoute = computed(() => {
   text-transform: none;
   letter-spacing: 0;
   height: 48px;
+  position: relative;
+  z-index: 1;
 }
 
 .route-tabs-container {
   display: flex;
   padding-left: 4px;
+  position: relative;
+  z-index: 1;
 }
 
 .route-tabs {
@@ -890,6 +950,7 @@ const currentRoute = computed(() => {
 
 .route-result {
   background-color: white;
+  margin-bottom: 16px;
 }
 
 .route-list :deep(.v-list-item) {
@@ -981,20 +1042,19 @@ const currentRoute = computed(() => {
   background-color: #f5f5f5;
 }
 
-/* Make sure the suggestion list appears above other elements */
-.route-search-panel {
-  overflow: visible !important; /* Allow suggestions to overflow */
-}
-
-.location-inputs {
-  overflow: visible !important; /* Allow suggestions to overflow */
-  z-index: 1001;
-  position: relative;
-}
-
-/* Enhanced visibility for text fields */
 .v-text-field {
   position: relative;
   z-index: 1;
+}
+
+.close-btn {
+  margin-right: 8px;
+  cursor: pointer;
+  opacity: 0.7;
+  transition: opacity 0.2s;
+}
+
+.close-btn:hover {
+  opacity: 1;
 }
 </style>

@@ -13,7 +13,7 @@ export const butuanEstablishments = [
   },
   {
     name: "Caraga state university",
-    coords: "8.960554636112633, 125.59561893959552",
+    coords: "8.959546137613962, 125.59607247902295",
   },
   {
     name: "Butuan Cathedral",
