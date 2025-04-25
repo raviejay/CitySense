@@ -14,7 +14,7 @@ const MAX_TRANSFER_DISTANCE = 300;
 // PUJ Fare constants
 const PUJ_BASE_FARE = 13.0; // Base fare for first 4km
 const PUJ_BASE_DISTANCE = 4000; // Base distance in meters (4km)
-const PUJ_ADDITIONAL_FARE_PER_KM = 1.75; // Additional fare per km
+const PUJ_ADDITIONAL_FARE_PER_KM = 1.8; // Additional fare per km
 
 export function useRoutes() {
   const store = useRoutesStore();

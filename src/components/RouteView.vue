@@ -3,7 +3,7 @@ import { ref, computed } from "vue";
 import MapPreview from "@/components/MapPreview.vue";
 import routesData from "@/data/routesData.json";
 import tricycleData from "@/data/tricycleData.json";
-
+import underCons from "@/assets/img/underCons.png";
 // State for route selection
 const selectedVehicleType = ref("puj"); // default to PUJ
 
@@ -105,7 +105,7 @@ const selectedRoute = computed(() => {
           <v-icon left>{{
             selectedVehicleType === "puj" ? "mdi-bus" : "mdi-motorbike"
           }}</v-icon>
-          {{ route.name }} -
+          {{ route.name.split(" ")[0] }} -
           {{ selectedVehicleType === "puj" ? "PUJ" : "Tricycle" }}
         </v-card-title>
         <v-card-subtitle class="route-subtitle">
@@ -142,7 +142,7 @@ const selectedRoute = computed(() => {
           </v-btn>
         </v-toolbar>
 
-        <div class="route-info-banner">
+        <!-- <div class="route-info-banner">
           <div class="route-origin-destination">
             <div class="route-point">
               <v-icon color="#00b4d8" size="20" class="mr-2"
@@ -150,15 +150,8 @@ const selectedRoute = computed(() => {
               >
               <span>{{ selectedRoute.startName || "Origin" }}</span>
             </div>
-            <v-icon color="grey" size="20">mdi-transit-connection</v-icon>
-            <div class="route-point">
-              <v-icon color="#03045e" size="20" class="mr-2"
-                >mdi-map-marker</v-icon
-              >
-              <span>{{ selectedRoute.endName || "Destination" }}</span>
-            </div>
           </div>
-        </div>
+        </div> -->
 
         <v-card-text class="ma-0 pa-0">
           <!-- Map Container -->
@@ -218,6 +211,13 @@ const selectedRoute = computed(() => {
 
                   <div class="additional-info">
                     <div class="info-item">
+                      <v-icon color="#03045e" class="mr-2"
+                        >mdi-map-marker-multiple-outline</v-icon
+                      >
+                      <span class="info-label">Endpoints</span>
+                      <span class="">Start & End of Route</span>
+                    </div>
+                    <div class="info-item">
                       <v-icon color="#03045e" class="mr-2">mdi-bus-stop</v-icon>
                       <span class="info-label">Vehicle Type:</span>
                       <span class="ccc">{{
@@ -238,60 +238,32 @@ const selectedRoute = computed(() => {
 
               <!-- Waypoints Tab -->
               <v-window-item value="waypoints">
-                <!-- Content remains the same -->
-                <div class="pa-4">
-                  <h3 class="text-h6 font-weight-medium mb-3">Route Stops</h3>
+                <div class="pa-4 text-center">
+                  <h3
+                    class="text-h6 font-weight-bold mb-3"
+                    style="color: #03045e"
+                  >
+                    Route Stops
+                  </h3>
 
-                  <div class="waypoints-list">
-                    <!-- Origin -->
-                    <div class="waypoint-item origin">
-                      <div class="waypoint-marker origin-marker">
-                        <v-icon color="white" size="16"
-                          >mdi-circle-small</v-icon
-                        >
-                      </div>
-                      <div class="waypoint-line"></div>
-                      <div class="waypoint-content">
-                        <span class="waypoint-title">{{
-                          selectedRoute.startName || "Origin"
-                        }}</span>
-                        <span class="waypoint-subtitle">Starting Point</span>
-                      </div>
-                    </div>
+                  <v-img
+                    :src="underCons"
+                    max-height="150"
+                    contain
+                    class="my-4"
+                  ></v-img>
 
-                    <!-- Waypoints -->
-                    <div
-                      v-for="(waypoint, index) in selectedRoute.waypointNames ||
-                      []"
-                      :key="index"
-                      class="waypoint-item"
-                    >
-                      <div class="waypoint-marker">
-                        <v-icon color="white" size="16"
-                          >mdi-circle-small</v-icon
-                        >
-                      </div>
-                      <div class="waypoint-line"></div>
-                      <div class="waypoint-content">
-                        <span class="waypoint-title">{{ waypoint }}</span>
-                      </div>
-                    </div>
+                  <v-alert type="info" variant="tonal" class="my-4">
+                    <template v-slot:prepend>
+                      <v-icon icon="mdi-alert-circle-outline"></v-icon>
+                    </template>
+                    <strong>Coming Soon!</strong> We're working on this feature.
+                  </v-alert>
 
-                    <!-- Destination -->
-                    <div class="waypoint-item destination">
-                      <div class="waypoint-marker destination-marker">
-                        <v-icon color="white" size="16"
-                          >mdi-circle-small</v-icon
-                        >
-                      </div>
-                      <div class="waypoint-content">
-                        <span class="waypoint-title">{{
-                          selectedRoute.endName || "Destination"
-                        }}</span>
-                        <span class="waypoint-subtitle">Final Stop</span>
-                      </div>
-                    </div>
-                  </div>
+                  <p class="text-body-2 text-medium-emphasis">
+                    The route stops feature will be available in our next
+                    update.
+                  </p>
                 </div>
               </v-window-item>
             </v-window>

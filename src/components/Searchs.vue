@@ -1,5 +1,5 @@
 <script setup>
-import { ref, watch, computed } from "vue";
+import { ref, watch, computed, onBeforeUnmount } from "vue";
 import { butuanEstablishments } from "@/data/butuanEstablishment";
 import { useRoutes } from "@/composables/useRoutes";
 import { useMapStore } from "@/stores/mapStore";
@@ -14,6 +14,7 @@ const googleMapsApiKey = "AIzaSyDXcJ66_US3pJQesji2iK7aIYHCW0gsEa4";
 const { findBestRoute, formatRouteName } = useRoutes();
 const expanded = ref(false);
 const activeTab = ref("suggested");
+const errorMessage = ref(null); // Added for error handling
 
 // Track which field is active for map clicks
 const activeInputField = ref(null); // 'start' or 'destination'
@@ -73,7 +74,6 @@ watch(
 // Updated: Watch for changes in search queries to clear coordinates
 watch(searchQueryStart, (newQuery) => {
   if (!newQuery) {
-    // Changed from userStart.value to props.startCoords
     if (props.startCoords) {
       emit("updateCoords", "", props.destinationCoords);
     }
@@ -82,7 +82,6 @@ watch(searchQueryStart, (newQuery) => {
 
 watch(searchQueryDestination, (newQuery) => {
   if (!newQuery) {
-    // Changed from userDestination.value to props.destinationCoords
     if (props.destinationCoords) {
       emit("updateCoords", props.startCoords, "");
     }
@@ -140,6 +139,7 @@ const clearInput = (type) => {
     searchQueryDestination.value = "";
     emit("clearCoords", "destination");
   }
+  errorMessage.value = null; // Clear error when inputs are cleared
 };
 
 // Modified onFocusInput to track active field
@@ -215,14 +215,21 @@ const clearMapObjects = () => {
 };
 
 const handleFindBestRoute = async () => {
+  // Validate inputs before proceeding
+  if (!props.startCoords || !props.destinationCoords) {
+    errorMessage.value = "Please select both starting point and destination";
+    return;
+  }
+
   loading.value = true;
+  errorMessage.value = null; // Reset error message when trying again
   try {
     clearMapObjects();
 
     // Use props.startCoords and props.destinationCoords instead of local state
     const result = await findBestRoute(
-      props.startCoords, // Changed from userStart.value
-      props.destinationCoords, // Changed from userDestination.value
+      props.startCoords,
+      props.destinationCoords,
       mapStore.mapInstance
     );
 
@@ -249,10 +256,12 @@ const handleFindBestRoute = async () => {
     } else {
       bestRoute.value = null;
       routeOptions.value = [];
+      errorMessage.value = "No route found between the selected locations";
     }
   } catch (error) {
     console.error("Error finding the best route:", error);
     bestRoute.value = null;
+    errorMessage.value = "Failed to find route. Please try again later.";
   } finally {
     loading.value = false;
   }
@@ -295,7 +304,15 @@ const formatPlaceName = (coords) => {
     .join(", ");
 };
 
+const tooltipInterval = ref(null);
+
 const createMarkers = (start, end) => {
+  // Clear any existing interval
+  if (tooltipInterval.value) {
+    clearInterval(tooltipInterval.value);
+  }
+
+  // Create start marker (unchanged)
   startMarker.value = L.marker([start[1], start[0]], {
     icon: L.divIcon({
       className: "start-marker",
@@ -311,6 +328,7 @@ const createMarkers = (start, end) => {
     .addTo(mapStore.mapInstance)
     .bindTooltip("Start");
 
+  // Create end marker with Street View functionality
   endMarker.value = L.marker([end[1], end[0]], {
     icon: L.divIcon({
       className: "end-marker",
@@ -324,9 +342,38 @@ const createMarkers = (start, end) => {
     }),
   })
     .addTo(mapStore.mapInstance)
-    .bindTooltip("Destination (Click for Street View)")
+    .bindTooltip("Destination (Click for Street View)", {
+      permanent: false,
+      direction: "right", // Position to the right
+      offset: [1, 10], // Adjust horizontal position
+      opacity: 0.9,
+      className: "compact-tooltip",
+    })
     .on("click", () => GoogleStreet(end));
+
+  // Set up interval to show tooltip every 5 seconds
+  tooltipInterval.value = setInterval(() => {
+    if (endMarker.value && mapStore.mapInstance) {
+      endMarker.value.openTooltip();
+
+      // Add temporary pulsing effect using Vuetify colors
+      const tooltipElement = document.querySelector(".street-view-tooltip");
+      if (tooltipElement) {
+        tooltipElement.classList.add("animate-pulse");
+        setTimeout(() => {
+          tooltipElement.classList.remove("animate-pulse");
+        }, 1000);
+      }
+    }
+  }, 5000);
 };
+
+// Clean up interval when component is unmounted
+onBeforeUnmount(() => {
+  if (tooltipInterval.value) {
+    clearInterval(tooltipInterval.value);
+  }
+});
 
 const panelHeight = computed(() => {
   if (!expanded.value) {
@@ -491,6 +538,17 @@ const currentRoute = computed(() => {
         </v-row>
       </v-sheet>
 
+      <!-- Error message display -->
+      <v-alert
+        v-if="errorMessage"
+        type="error"
+        variant="tonal"
+        class="mb-4"
+        density="compact"
+      >
+        {{ errorMessage }}
+      </v-alert>
+
       <!-- Find route button - adjusted margin to maintain proper spacing -->
       <v-btn
         block
@@ -527,6 +585,19 @@ const currentRoute = computed(() => {
       </div>
 
       <div class="results-wrapper">
+        <!-- No route found message -->
+        <v-sheet
+          v-if="!bestRoute && !loading && expanded"
+          class="route-result pa-4 text-center"
+          rounded
+        >
+          <v-icon size="large" color="#90e0ef">mdi-map-marker-question</v-icon>
+          <p class="mt-2">No route found between the selected locations</p>
+          <p class="text-caption">
+            Try selecting different start or destination points
+          </p>
+        </v-sheet>
+
         <v-sheet
           v-if="bestRoute && activeTab === 'suggested'"
           class="route-result"
@@ -534,7 +605,6 @@ const currentRoute = computed(() => {
         >
           <v-list density="compact" class="route-list pa-0">
             <!-- Main route option -->
-
             <v-list-item :active="true" active-color="#00B4D8">
               <template v-slot:prepend>
                 <v-avatar color="#CAF0EF" class="mr-2">
@@ -785,53 +855,6 @@ const currentRoute = computed(() => {
                 </div>
 
                 <v-divider class="my-3"></v-divider>
-
-                <!-- <v-row class="route-summary">
-                  Total Distance - left align 
-                  <v-col cols="4" class="d-flex flex-column">
-                    <v-text class="text-caption mb-1" style="color: #03045e">
-                      Total Distance
-                    </v-text>
-                    <v-text
-                      class="text-body-1 font-weight-medium"
-                      style="color: #00b4d8"
-                    >
-                      {{ formatDistance(route.totalDistance) }}
-                    </v-text>
-                  </v-col>
-
-                 
-                  <v-col cols="4" class="d-flex flex-column align-center">
-                    <v-text
-                      class="text-caption mb-1 text-center"
-                      style="color: #03045e"
-                    >
-                      Total Fare
-                    </v-text>
-                    <v-text
-                      class="text-body-1 font-weight-medium text-center"
-                      style="color: #00b4d8"
-                    >
-                      ₱{{ route.totalFare }}
-                    </v-text>
-                  </v-col>
-
-                  
-                  <v-col cols="4" class="d-flex flex-column align-end">
-                    <v-text
-                      class="text-caption mb-1 text-right"
-                      style="color: #03045e"
-                    >
-                      Est. Travel Times
-                    </v-text>
-                    <v-text
-                      class="text-body-1 font-weight-medium text-right"
-                      style="color: #00b4d8"
-                    >
-                      {{ formatTime(route.estimatedTime) }}
-                    </v-text>
-                  </v-col>
-                </v-row> -->
               </div>
             </template>
           </v-list>
@@ -859,19 +882,18 @@ const currentRoute = computed(() => {
   background-color: #f5f7fa;
   border-top-left-radius: 20px !important;
   border-top-right-radius: 20px !important;
-  overflow: hidden; /* Changed from overflow-y: auto to prevent scrolling issues */
+  overflow: hidden;
   transition: max-height 0.3s ease;
 }
 
 .panel-content {
   height: 100%;
-
-  padding-bottom: 24px; /* Add padding to ensure content isn't cut off */
+  padding-bottom: 24px;
 }
 
 .results-wrapper {
   overflow-y: auto;
-  max-height: calc(70vh - 200px); /* Adjust the height as needed */
+  max-height: calc(70vh - 200px);
 }
 
 .panel-expanded {
@@ -994,7 +1016,6 @@ const currentRoute = computed(() => {
   color: #03045e;
 }
 
-/* CSS continued from previous code */
 .step-details {
   color: rgba(0, 0, 0, 0.6);
   font-size: 0.875rem;
@@ -1004,7 +1025,6 @@ const currentRoute = computed(() => {
   padding: 8px 0;
 }
 
-/* Improved suggestion list styles */
 .search-container {
   position: relative;
   width: 100%;
@@ -1015,7 +1035,7 @@ const currentRoute = computed(() => {
   width: 100%;
   max-height: 200px;
   overflow-y: auto;
-  z-index: 9999; /* Higher z-index to ensure visibility */
+  z-index: 9999;
   background: white;
   box-shadow: 0 4px 8px rgba(0, 0, 0, 0.2);
   border-radius: 4px;
@@ -1024,11 +1044,11 @@ const currentRoute = computed(() => {
 }
 
 .destination-suggestions {
-  top: 100%; /* Position directly below the input */
+  top: 100%;
 }
 
 .start-suggestions {
-  top: 100%; /* Position directly below the input */
+  top: 100%;
 }
 
 .suggestion-item {
@@ -1056,5 +1076,59 @@ const currentRoute = computed(() => {
 
 .close-btn:hover {
   opacity: 1;
+}
+
+/* Added styles for error state */
+.error-message {
+  color: #d32f2f;
+  font-size: 0.875rem;
+  margin-top: 4px;
+  padding: 0 12px;
+}
+
+/* Add pulse animation using Vuetify's primary color */
+.animate-pulse {
+  animation: pulse 1s ease-in-out;
+}
+
+@keyframes pulse {
+  0% {
+    box-shadow: 0 0 0 0 rgba(30, 136, 229, 0.7);
+  }
+  70% {
+    box-shadow: 0 0 0 10px rgba(30, 136, 229, 0);
+  }
+  100% {
+    box-shadow: 0 0 0 0 rgba(30, 136, 229, 0);
+  }
+}
+
+/* Style the tooltip to match Vuetify theme */
+.street-view-tooltip {
+  background-color: var(--v-primary-base);
+  color: white;
+  padding: 8px 12px;
+  border-radius: 4px;
+  font-size: 14px;
+  font-family: "Roboto", sans-serif;
+}
+
+.street-view-tooltip::before {
+  border-top-color: var(--v-primary-base) !important;
+}
+
+.compact-tooltip {
+  background-color: #1976d2; /* Vuetify primary color */
+  color: white;
+  padding: 4px 8px;
+  border-radius: 3px;
+  font-size: 12px;
+  font-weight: 500;
+  margin-left: 8px !important;
+}
+
+.compact-tooltip.leaflet-tooltip-right::before {
+  left: -6px !important;
+  border-right-color: #1976d2 !important;
 }
 </style>
