@@ -410,6 +410,35 @@ const currentRoute = computed(() => {
     return alternativeRoute.value;
   }
 });
+const hasPuj = computed(() => {
+  if (!currentRoute.value || !currentRoute.value.steps) return false;
+  return currentRoute.value.steps.some((step) => step.mode === "PUJ");
+});
+const calculateDiscountedFare = (fare, mode) => {
+  if (mode === "PUJ") {
+    return {
+      regular: fare,
+      discounted: fare * 0.8, // 20% discount
+    };
+  }
+  return {
+    regular: fare,
+    discounted: fare, // No discount for other modes
+  };
+};
+
+const calculateFares = computed(() => {
+  if (!currentRoute.value?.steps) return { regular: 0, discounted: 0 };
+
+  return currentRoute.value.steps.reduce(
+    (totals, step) => {
+      totals.regular += step.fare || 0;
+      totals.discounted += step.mode === "PUJ" ? step.fare * 0.8 : step.fare;
+      return totals;
+    },
+    { regular: 0, discounted: 0 }
+  );
+});
 </script>
 
 <template>
@@ -665,13 +694,42 @@ const currentRoute = computed(() => {
                         v-if="step.routeName"
                         class="ml-2"
                         style="color: #00b4d8"
-                        >({{ step.routeName }})</span
                       >
+                        ({{ step.routeName }})
+                      </span>
                       <span
                         class="ml-auto"
                         style="color: #00b4d8; font-weight: 500"
                       >
-                        ₱{{ step.fare.toFixed(2) }}
+                        <template v-if="step.mode === 'PUJ'">
+                          <div class="d-flex flex-column text-right">
+                            <span
+                              class="text-caption"
+                              style="text-decoration: line-through; color: #666"
+                            >
+                              ₱{{
+                                calculateDiscountedFare(
+                                  step.fare,
+                                  step.mode
+                                ).regular.toFixed(2)
+                              }}
+                            </span>
+                            <span class="text-success font-weight-bold">
+                              ₱{{
+                                calculateDiscountedFare(
+                                  step.fare,
+                                  step.mode
+                                ).discounted.toFixed(2)
+                              }}
+                            </span>
+                            <span class="text-caption text-success"
+                              >(Student/Senior)</span
+                            >
+                          </div>
+                        </template>
+                        <template v-else>
+                          ₱{{ step.fare.toFixed(2) }}
+                        </template>
                       </span>
                     </div>
                     <div class="step-details">
@@ -716,12 +774,32 @@ const currentRoute = computed(() => {
                 >
                   Total Fare
                 </v-text>
-                <v-text
-                  class="text-body-1 font-weight-medium text-center"
-                  style="color: #00b4d8"
-                >
-                  ₱{{ bestRoute.totalFare }}
-                </v-text>
+                <div>
+                  <template v-if="hasPuj">
+                    <div class="d-flex flex-column align-center">
+                      <span
+                        class="text-caption original-price"
+                        style="text-decoration: line-through; color: #666"
+                      >
+                        ₱{{ calculateFares.regular.toFixed(0) }}
+                      </span>
+                      <span class="text-success font-weight-bold">
+                        ₱{{ calculateFares.discounted.toFixed(0) }}
+                      </span>
+                      <span class="text-caption text-success"
+                        >(Student/Senior)</span
+                      >
+                    </div>
+                  </template>
+                  <template v-else>
+                    <span
+                      class="text-body-1 font-weight-medium"
+                      style="color: #00b4d8"
+                    >
+                      ₱{{ calculateFares.regular.toFixed(0) }}
+                    </span>
+                  </template>
+                </div>
               </v-col>
 
               <!-- Est. Travel Time - right align -->
@@ -787,7 +865,7 @@ const currentRoute = computed(() => {
               </v-list-item>
 
               <!-- Route details when expanded -->
-              <div v-if="expanded" class="route-details pa-4 mt-2">
+              <div v-if="expanded" class="route-details pa-8 mt-2">
                 <div
                   class="text-h10 font-weight-bold mb-2"
                   style="color: #03045e"
@@ -823,16 +901,45 @@ const currentRoute = computed(() => {
                             v-if="step.routeName"
                             class="ml-2"
                             style="color: #00b4d8"
-                            >({{ step.routeName }})</span
                           >
+                            ({{ step.routeName }})
+                          </span>
                           <span
                             class="ml-auto"
                             style="color: #00b4d8; font-weight: 500"
                           >
-                            ₱{{
-                              step.fare?.toFixed(2) ||
-                              stepFares[stepIndex]?.toFixed(2)
-                            }}
+                            <template v-if="step.mode === 'PUJ'">
+                              <div class="d-flex flex-column text-right">
+                                <span
+                                  class="text-caption"
+                                  style="
+                                    text-decoration: line-through;
+                                    color: #666;
+                                  "
+                                >
+                                  ₱{{
+                                    calculateDiscountedFare(
+                                      step.fare,
+                                      step.mode
+                                    ).regular.toFixed(2)
+                                  }}
+                                </span>
+                                <span class="text-success font-weight-bold">
+                                  ₱{{
+                                    calculateDiscountedFare(
+                                      step.fare,
+                                      step.mode
+                                    ).discounted.toFixed(2)
+                                  }}
+                                </span>
+                                <span class="text-caption text-success"
+                                  >(Student/Senior)</span
+                                >
+                              </div>
+                            </template>
+                            <template v-else>
+                              ₱{{ step.fare.toFixed(2) }}
+                            </template>
                           </span>
                         </div>
                         <div class="step-details">

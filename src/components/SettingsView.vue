@@ -6,7 +6,6 @@ const mapStore = useMapStore();
 
 const themeOptions = [
   { value: "light", label: "Light", icon: "mdi-weather-sunny" },
-  { value: "dark", label: "Dark", icon: "mdi-weather-night" },
 ];
 
 const mapStyleOptions = [
@@ -81,8 +80,8 @@ watch(currentMapStyle, (newStyle) => {
         >
           <template v-slot:item="{ props, item }">
             <v-list-item v-bind="props">
-              <template v-slot:prepend>
-                <v-icon :icon="item.icon" color="#2196F3"></v-icon>
+              <template #prepend>
+                <v-icon :icon="item.raw.icon" color="#2196F3"></v-icon>
               </template>
             </v-list-item>
           </template>
