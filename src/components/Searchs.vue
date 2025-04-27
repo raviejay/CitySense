@@ -903,9 +903,11 @@ onMounted(async () => {
                       <span style="color: #00b4d8">
                         • ({{ formatDistance(step.distance) }})
                       </span>
-                      <span class="text-caption text-success">
-                        (Student/Senior)
-                      </span>
+                      <template v-if="step.mode === 'PUJ'">
+                        <span class="text-caption text-success">
+                          (Student/Senior)
+                        </span>
+                      </template>
                     </div>
                   </div>
                 </div>
@@ -1112,9 +1114,11 @@ onMounted(async () => {
                           <span style="color: #00b4d8">
                             • ({{ formatDistance(step.distance) }})
                           </span>
-                          <span class="text-caption text-success">
-                            (Student/Senior)
-                          </span>
+                          <template v-if="step.mode === 'PUJ'">
+                            <span class="text-caption text-success">
+                              (Student/Senior)
+                            </span>
+                          </template>
                         </div>
                       </div>
                     </div>
