@@ -857,7 +857,7 @@ onMounted(async () => {
                         class="ml-2"
                         style="color: #00b4d8"
                       >
-                        ({{ step.routeName }})
+                        ({{ step.routeName.split(" ")[0] }})
                       </span>
                       <span
                         class="ml-auto"
@@ -1068,7 +1068,7 @@ onMounted(async () => {
                             class="ml-2"
                             style="color: #00b4d8"
                           >
-                            ({{ step.routeName }})
+                            ({{ step.routeName.split(" ")[0] }})
                           </span>
                           <span
                             class="ml-auto"
