@@ -1,5 +1,5 @@
 <script setup>
-import { ref, watch, computed, onBeforeUnmount } from "vue";
+import { ref, watch, computed, onBeforeUnmount, onMounted } from "vue";
 import { butuanEstablishments } from "@/data/butuanEstablishment";
 import { useRoutes } from "@/composables/useRoutes";
 import { useMapStore } from "@/stores/mapStore";
@@ -15,6 +15,9 @@ const { findBestRoute, formatRouteName } = useRoutes();
 const expanded = ref(false);
 const activeTab = ref("suggested");
 const errorMessage = ref(null); // Added for error handling
+// Add these new refs
+const gettingLocation = ref(false);
+const locationError = ref(null);
 
 // Track which field is active for map clicks
 const activeInputField = ref(null); // 'start' or 'destination'
@@ -439,6 +442,131 @@ const calculateFares = computed(() => {
     { regular: 0, discounted: 0 }
   );
 });
+
+// Add this new function to get current location
+const getCurrentLocation = () => {
+  gettingLocation.value = true;
+  locationError.value = null;
+
+  if (!navigator.geolocation) {
+    locationError.value = "Geolocation is not supported by your browser";
+    gettingLocation.value = false;
+    return;
+  }
+
+  navigator.geolocation.getCurrentPosition(
+    (position) => {
+      // Format coordinates for our app (lng, lat)
+      const coords = `${position.coords.longitude}, ${position.coords.latitude}`;
+
+      // Find if there's a nearby establishment (optional enhancement)
+      const nearbyEstablishment = findNearbyEstablishment(
+        position.coords.latitude,
+        position.coords.longitude
+      );
+
+      if (nearbyEstablishment) {
+        searchQueryStart.value = nearbyEstablishment.name;
+      } else {
+        searchQueryStart.value = "My Current Location";
+      }
+
+      // Update the coordinates through emit
+      emit("updateCoords", coords, props.destinationCoords);
+      gettingLocation.value = false;
+    },
+    (error) => {
+      switch (error.code) {
+        case error.PERMISSION_DENIED:
+          locationError.value = "Location permission denied";
+          break;
+        case error.POSITION_UNAVAILABLE:
+          locationError.value = "Location unavailable";
+          break;
+        case error.TIMEOUT:
+          locationError.value = "Location request timed out";
+          break;
+        default:
+          locationError.value = "Location error";
+      }
+      gettingLocation.value = false;
+    },
+    {
+      enableHighAccuracy: true,
+      timeout: 10000,
+      maximumAge: 0,
+    }
+  );
+};
+
+// Helper function to find nearby establishment (optional enhancement)
+const findNearbyEstablishment = (lat, lng) => {
+  // Define a reasonable radius for "nearby" (0.001 degrees is roughly 100m)
+  const MAX_DISTANCE = 0.001;
+
+  return butuanEstablishments.find((est) => {
+    const [estLat, estLng] = est.coords
+      .split(",")
+      .map((c) => parseFloat(c.trim()));
+    const distance = Math.sqrt(
+      Math.pow(estLat - lat, 2) + Math.pow(estLng - lng, 2)
+    );
+    return distance < MAX_DISTANCE;
+  });
+};
+
+// Request permission on mount (important for iOS)
+onMounted(() => {
+  // Check if the Permissions API is available
+  if (navigator.permissions && navigator.permissions.query) {
+    navigator.permissions
+      .query({ name: "geolocation" })
+      .then((permissionStatus) => {
+        // If permission is 'prompt', we can pre-request it
+        if (permissionStatus.state === "prompt") {
+          // Request permission proactively
+          navigator.geolocation.getCurrentPosition(
+            // Success callback - just acknowledge permission granted
+            () => {
+              console.log("Location permission granted");
+              // Not updating UI here, just requesting permission
+            },
+            // Error callback
+            (error) => {
+              if (error.code === error.PERMISSION_DENIED) {
+                console.log("Location permission denied");
+              }
+            },
+            { timeout: 10000, maximumAge: 60000 }
+          );
+        }
+
+        // Add a listener for permission changes
+        permissionStatus.onchange = () => {
+          console.log(
+            "Geolocation permission state has changed to:",
+            permissionStatus.state
+          );
+        };
+      });
+  } else {
+    // For browsers that don't support Permissions API but do support geolocation
+    if (navigator.geolocation) {
+      // In some browsers, especially on iOS, we need to request permission explicitly
+      navigator.geolocation.getCurrentPosition(
+        () => {
+          console.log("Location permission granted");
+        },
+        (error) => {
+          if (error.code === error.PERMISSION_DENIED) {
+            console.log("Location permission denied");
+          }
+        },
+        { timeout: 10000, maximumAge: 60000 }
+      );
+    }
+  }
+});
 </script>
 
 <template>
@@ -481,6 +609,20 @@ const calculateFares = computed(() => {
                 @blur="onBlurStartInput"
               >
                 <template v-slot:append-inner>
+                  <span>
+                    <v-btn
+                      icon
+                      variant="text"
+                      density="compact"
+                      size="large"
+                      color="#00B4D8"
+                      class="location-btn pa-2"
+                      @click.stop="getCurrentLocation"
+                      :loading="gettingLocation"
+                    >
+                      <v-icon size="small">mdi-crosshairs-gps</v-icon>
+                    </v-btn>
+                  </span>
                   <v-icon
                     v-if="searchQueryStart"
                     size="small"
@@ -511,6 +653,17 @@ const calculateFares = computed(() => {
                 </v-list-item>
               </v-list>
             </div>
+
+            <!-- Add location error message if needed -->
+            <v-alert
+              v-if="locationError"
+              type="warning"
+              variant="tonal"
+              class="mt-2 mb-2"
+              density="compact"
+            >
+              {{ locationError }}
+            </v-alert>
 
             <v-divider class="my-3"></v-divider>
 
@@ -703,28 +856,30 @@ const calculateFares = computed(() => {
                       >
                         <template v-if="step.mode === 'PUJ'">
                           <div class="d-flex flex-column text-right">
-                            <span
-                              class="text-caption"
-                              style="text-decoration: line-through; color: #666"
-                            >
-                              ₱{{
-                                calculateDiscountedFare(
-                                  step.fare,
-                                  step.mode
-                                ).regular.toFixed(2)
-                              }}
+                            <span>
+                              <span
+                                class="text-caption"
+                                style="
+                                  text-decoration: line-through;
+                                  color: #666;
+                                "
+                              >
+                                ₱{{
+                                  calculateDiscountedFare(
+                                    step.fare,
+                                    step.mode
+                                  ).regular.toFixed(2)
+                                }}
+                              </span>
+                              <span class="text-success font-weight-bold">
+                                ₱{{
+                                  calculateDiscountedFare(
+                                    step.fare,
+                                    step.mode
+                                  ).discounted.toFixed(2)
+                                }}
+                              </span>
                             </span>
-                            <span class="text-success font-weight-bold">
-                              ₱{{
-                                calculateDiscountedFare(
-                                  step.fare,
-                                  step.mode
-                                ).discounted.toFixed(2)
-                              }}
-                            </span>
-                            <span class="text-caption text-success"
-                              >(Student/Senior)</span
-                            >
                           </div>
                         </template>
                         <template v-else>
@@ -732,18 +887,16 @@ const calculateFares = computed(() => {
                         </template>
                       </span>
                     </div>
-                    <div class="step-details">
-                      <span>
-                        {{
-                          step.description ||
-                          `Take ${step.mode} for about ${Math.round(
-                            step.distance / (step.mode === "PUJ" ? 333 : 250)
-                          )} minutes`
-                        }}
+                    <div
+                      class="step-details"
+                      style="display: flex; justify-content: space-between"
+                    >
+                      <span style="color: #00b4d8">
+                        • ({{ formatDistance(step.distance) }})
                       </span>
-                      <span class="ml-auto" style="color: #00b4d8">
-                        • ({{ formatDistance(step.distance) }})</span
-                      >
+                      <span class="text-caption text-success">
+                        (Student/Senior)
+                      </span>
                     </div>
                   </div>
                 </div>
@@ -853,7 +1006,9 @@ const calculateFares = computed(() => {
                   <span class="font-weight-medium">{{
                     formatRouteName(route)
                   }}</span>
-                  <span class="font-weight-bold"> ₱{{ route.totalFare }} </span>
+                  <span class="font-weight-bold">
+                    ₱{{ route.totalFare.toFixed(2) }}
+                  </span>
                 </v-list-item-title>
 
                 <v-list-item-subtitle class="d-flex justify-space-between">
@@ -910,31 +1065,30 @@ const calculateFares = computed(() => {
                           >
                             <template v-if="step.mode === 'PUJ'">
                               <div class="d-flex flex-column text-right">
-                                <span
-                                  class="text-caption"
-                                  style="
-                                    text-decoration: line-through;
-                                    color: #666;
-                                  "
-                                >
-                                  ₱{{
-                                    calculateDiscountedFare(
-                                      step.fare,
-                                      step.mode
-                                    ).regular.toFixed(2)
-                                  }}
+                                <span>
+                                  <span
+                                    class="text-caption"
+                                    style="
+                                      text-decoration: line-through;
+                                      color: #666;
+                                    "
+                                  >
+                                    ₱{{
+                                      calculateDiscountedFare(
+                                        step.fare,
+                                        step.mode
+                                      ).regular.toFixed(2)
+                                    }}
+                                  </span>
+                                  <span class="text-success font-weight-bold">
+                                    ₱{{
+                                      calculateDiscountedFare(
+                                        step.fare,
+                                        step.mode
+                                      ).discounted.toFixed(2)
+                                    }}
+                                  </span>
                                 </span>
-                                <span class="text-success font-weight-bold">
-                                  ₱{{
-                                    calculateDiscountedFare(
-                                      step.fare,
-                                      step.mode
-                                    ).discounted.toFixed(2)
-                                  }}
-                                </span>
-                                <span class="text-caption text-success"
-                                  >(Student/Senior)</span
-                                >
                               </div>
                             </template>
                             <template v-else>
@@ -942,19 +1096,16 @@ const calculateFares = computed(() => {
                             </template>
                           </span>
                         </div>
-                        <div class="step-details">
-                          <span>
-                            {{
-                              step.description ||
-                              `Take ${step.mode} for about ${Math.round(
-                                step.distance /
-                                  (step.mode === "PUJ" ? 333 : 250)
-                              )} minutes`
-                            }}
+                        <div
+                          class="step-details"
+                          style="display: flex; justify-content: space-between"
+                        >
+                          <span style="color: #00b4d8">
+                            • ({{ formatDistance(step.distance) }})
                           </span>
-                          <span class="ml-auto" style="color: #00b4d8">
-                            • ({{ formatDistance(step.distance) }})</span
-                          >
+                          <span class="text-caption text-success">
+                            (Student/Senior)
+                          </span>
                         </div>
                       </div>
                     </div>
@@ -1237,5 +1388,17 @@ const calculateFares = computed(() => {
 .compact-tooltip.leaflet-tooltip-right::before {
   left: -6px !important;
   border-right-color: #1976d2 !important;
+}
+
+.location-btn {
+  margin-right: 8px;
+  cursor: pointer;
+  opacity: 0.8;
+  transition: opacity 0.2s;
+}
+
+.location-btn:hover {
+  opacity: 1;
+  background-color: rgba(0, 180, 216, 0.1);
 }
 </style>
