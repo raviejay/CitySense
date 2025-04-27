@@ -4,6 +4,7 @@ import { butuanEstablishments } from "@/data/butuanEstablishment";
 import { useRoutes } from "@/composables/useRoutes";
 import { useMapStore } from "@/stores/mapStore";
 import GoogleStreetView from "./GoogleStreetView.vue";
+import { Geolocation } from "@capacitor/geolocation";
 
 const mapStore = useMapStore();
 const bestRoute = ref(null);
@@ -444,59 +445,54 @@ const calculateFares = computed(() => {
 });
 
 // Add this new function to get current location
-const getCurrentLocation = () => {
+const getCurrentLocation = async () => {
   gettingLocation.value = true;
   locationError.value = null;
 
-  if (!navigator.geolocation) {
-    locationError.value = "Geolocation is not supported by your browser";
-    gettingLocation.value = false;
-    return;
-  }
+  try {
+    // First, request permissions
+    const permissionStatus = await Geolocation.checkPermissions();
 
-  navigator.geolocation.getCurrentPosition(
-    (position) => {
-      // Format coordinates for our app (lng, lat)
-      const coords = `${position.coords.longitude}, ${position.coords.latitude}`;
+    if (permissionStatus.location !== "granted") {
+      // Request permission if not granted
+      const requestResult = await Geolocation.requestPermissions();
 
-      // Find if there's a nearby establishment (optional enhancement)
-      const nearbyEstablishment = findNearbyEstablishment(
-        position.coords.latitude,
-        position.coords.longitude
-      );
-
-      if (nearbyEstablishment) {
-        searchQueryStart.value = nearbyEstablishment.name;
-      } else {
-        searchQueryStart.value = "My Current Location";
+      if (requestResult.location !== "granted") {
+        locationError.value = "Location permission denied";
+        gettingLocation.value = false;
+        return;
       }
+    }
 
-      // Update the coordinates through emit
-      emit("updateCoords", coords, props.destinationCoords);
-      gettingLocation.value = false;
-    },
-    (error) => {
-      switch (error.code) {
-        case error.PERMISSION_DENIED:
-          locationError.value = "Location permission denied";
-          break;
-        case error.POSITION_UNAVAILABLE:
-          locationError.value = "Location unavailable";
-          break;
-        case error.TIMEOUT:
-          locationError.value = "Location request timed out";
-          break;
-        default:
-          locationError.value = "Location error";
-      }
-      gettingLocation.value = false;
-    },
-    {
+    // Get current position
+    const position = await Geolocation.getCurrentPosition({
       enableHighAccuracy: true,
       timeout: 10000,
-      maximumAge: 0,
+    });
+
+    // Format coordinates for our app (lng, lat)
+    const coords = `${position.coords.longitude}, ${position.coords.latitude}`;
+
+    // Find if there's a nearby establishment (optional enhancement)
+    const nearbyEstablishment = findNearbyEstablishment(
+      position.coords.latitude,
+      position.coords.longitude
+    );
+
+    if (nearbyEstablishment) {
+      searchQueryStart.value = nearbyEstablishment.name;
+    } else {
+      searchQueryStart.value = "My Current Location";
     }
-  );
+
+    // Update the coordinates through emit
+    emit("updateCoords", coords, props.destinationCoords);
+  } catch (error) {
+    console.error("Error getting location", error);
+    locationError.value = error.message || "Failed to get location";
+  } finally {
+    gettingLocation.value = false;
+  }
 };
 
 // Helper function to find nearby establishment (optional enhancement)
@@ -516,54 +512,67 @@ const findNearbyEstablishment = (lat, lng) => {
 };
 
 // Request permission on mount (important for iOS)
-onMounted(() => {
-  // Check if the Permissions API is available
-  if (navigator.permissions && navigator.permissions.query) {
-    navigator.permissions
-      .query({ name: "geolocation" })
-      .then((permissionStatus) => {
-        // If permission is 'prompt', we can pre-request it
-        if (permissionStatus.state === "prompt") {
-          // Request permission proactively
-          navigator.geolocation.getCurrentPosition(
-            // Success callback - just acknowledge permission granted
-            () => {
-              console.log("Location permission granted");
-              // Not updating UI here, just requesting permission
-            },
-            // Error callback
-            (error) => {
-              if (error.code === error.PERMISSION_DENIED) {
-                console.log("Location permission denied");
-              }
-            },
-            { timeout: 10000, maximumAge: 60000 }
-          );
-        }
-
-        // Add a listener for permission changes
-        permissionStatus.onchange = () => {
-          console.log(
-            "Geolocation permission state has changed to:",
-            permissionStatus.state
-          );
-        };
-      });
-  } else {
-    // For browsers that don't support Permissions API but do support geolocation
-    if (navigator.geolocation) {
-      // In some browsers, especially on iOS, we need to request permission explicitly
-      navigator.geolocation.getCurrentPosition(
-        () => {
-          console.log("Location permission granted");
-        },
-        (error) => {
-          if (error.code === error.PERMISSION_DENIED) {
-            console.log("Location permission denied");
-          }
-        },
-        { timeout: 10000, maximumAge: 60000 }
+onMounted(async () => {
+  try {
+    // 1. First try Capacitor Geolocation (for Android/iOS)
+    if (typeof Geolocation !== "undefined" && Geolocation.checkPermissions) {
+      const permissionStatus = await Geolocation.checkPermissions();
+      console.log(
+        "Location permission status (Capacitor):",
+        permissionStatus.location
       );
+
+      if (permissionStatus.location === "prompt") {
+        await Geolocation.requestPermissions(); // Directly request if not granted
+      }
+
+      // Optional: Get position if permission is granted
+      if (permissionStatus.location === "granted") {
+        const position = await Geolocation.getCurrentPosition();
+        console.log("Current position:", position);
+      }
+    }
+    // 2. Fallback to Web API (browsers)
+    else if (navigator.permissions?.query) {
+      const permissionStatus = await navigator.permissions.query({
+        name: "geolocation",
+      });
+      console.log(
+        "Location permission status (Web API):",
+        permissionStatus.state
+      );
+
+      if (permissionStatus.state === "prompt") {
+        // Request permission by trying to get position
+        await new Promise((resolve, reject) => {
+          navigator.geolocation.getCurrentPosition(
+            () => resolve("granted"),
+            (error) => reject(error),
+            { timeout: 10000 }
+          );
+        });
+      }
+    }
+    // 3. Last fallback: Directly call getCurrentPosition (older browsers/iOS)
+    else if (navigator.geolocation) {
+      await new Promise((resolve, reject) => {
+        navigator.geolocation.getCurrentPosition(
+          () => resolve("granted"),
+          (error) => reject(error),
+          { timeout: 10000 }
+        );
+      });
+    } else {
+      console.error("Geolocation is not supported in this environment.");
+    }
+  } catch (error) {
+    if (
+      error.code === "PERMISSION_DENIED" ||
+      error.code === error.PERMISSION_DENIED
+    ) {
+      console.log("User denied location permission.");
+    } else {
+      console.error("Error accessing location:", error);
     }
   }
 });
