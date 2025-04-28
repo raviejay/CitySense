@@ -192,21 +192,25 @@ const endMarker = ref(null);
 const allPolylines = ref([]);
 
 const clearMapObjects = () => {
-  if (startMarker.value) {
-    startMarker.value.remove();
+  // Use proper Leaflet removal for markers
+  if (startMarker.value && mapStore.mapInstance) {
+    mapStore.mapInstance.removeLayer(startMarker.value);
     startMarker.value = null;
   }
-  if (endMarker.value) {
-    endMarker.value.remove();
+
+  if (endMarker.value && mapStore.mapInstance) {
+    mapStore.mapInstance.removeLayer(endMarker.value);
     endMarker.value = null;
   }
 
+  // Clear polylines as before
   allPolylines.value.forEach((polyline) => {
     if (polyline && typeof polyline.remove === "function") {
       polyline.remove();
     }
   });
 
+  // Additional safety check - remove all polylines from the map
   if (mapStore.mapInstance) {
     mapStore.mapInstance.eachLayer((layer) => {
       if (layer instanceof L.Polyline && !(layer instanceof L.Polygon)) {
@@ -808,7 +812,14 @@ onMounted(async () => {
               <v-list-item-title
                 class="d-flex align-center justify-space-between"
               >
-                <span class="font-weight-medium">{{ bestRoute.name }}</span>
+                <span class="font-weight-medium">
+                  {{
+                    bestRoute.name
+                      .split(" → ")
+                      .map((part) => part.split(" ")[0])
+                      .join(" → ")
+                  }}</span
+                >
                 <span class="font-weight-bold">
                   ₱{{ bestRoute.totalFare }}
                 </span>
@@ -1016,6 +1027,9 @@ onMounted(async () => {
                 >
                   <span class="font-weight-medium">{{
                     formatRouteName(route)
+                      .split(" → ")
+                      .map((part) => part.split(" ")[0])
+                      .join(" → ")
                   }}</span>
                   <span class="font-weight-bold">
                     ₱{{ route.totalFare.toFixed(2) }}

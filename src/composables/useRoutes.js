@@ -281,6 +281,7 @@ export function useRoutes() {
       endCoords
     );
 
+    //get all routes
     const allRoutes = store.getRoutes();
 
     // Build the transport graph
@@ -295,7 +296,6 @@ export function useRoutes() {
       `Found ${graph.startNodes.length} start points and ${graph.endNodes.length} end points`
     );
 
-    // Run A* algorithm for each start-end pair and keep the best routes
     const possibleRoutes = [];
 
     for (const startNode of graph.startNodes) {
@@ -318,7 +318,7 @@ export function useRoutes() {
       }
 
       // Create a composite score
-      const getFareScore = (route) => route.totalFare / 50;
+      const getFareScore = (route) => route.totalFare / 16;
       const getDistanceScore = (route) => route.totalDistance / 5000;
       const getTransferScore = (route) => {
         if (route.transferDistances && route.transferDistances.length > 0) {
@@ -705,15 +705,15 @@ export function useRoutes() {
         const fare = edge.fare;
         const transferDistance = edge.transferDistance;
 
-        // Weight factors (can be adjusted based on user preferences)
+        // Weight factors
         const DISTANCE_WEIGHT = 0.4;
         const FARE_WEIGHT = 0.3;
         const TRANSFER_WEIGHT = 0.3;
         const TRANSFER_PENALTY = 0.5;
 
         // Normalize scores
-        const normalizedDistance = distance / 5000; // Normalized to 5km
-        const normalizedFare = fare / 50; // Normalized to 50 units
+        const normalizedDistance = distance / 5000; // Normalized to 35000km
+        const normalizedFare = fare / 16; // Normalized to 50 units
         const normalizedTransfer = transferDistance / MAX_TRANSFER_DISTANCE;
 
         const edgeCost =
@@ -767,9 +767,7 @@ export function useRoutes() {
     // Steps array for the final route
     const steps = [];
     let totalDistance = 0;
-    let totalFare = 0;
     const transferDistances = [];
-    const stepFares = []; // Array to track fares for each step
 
     // Reconstruct the path by following cameFrom
     while (cameFrom[current]) {
@@ -824,22 +822,9 @@ export function useRoutes() {
                 : "Tricycle Route",
           };
           steps.push(newStep);
-          stepFares.push(stepFare); // Track the fare for this step
         }
 
         totalDistance += edge.distance;
-
-        // Only add to total fare when creating a new step
-        // For PUJ, the fare is recalculated for the entire distance when extending
-        if (
-          !(lastStep && lastStep.routeName === edge.routeName) ||
-          edge.routeType !== "PUJ"
-        ) {
-          totalFare +=
-            edge.routeType === "PUJ"
-              ? calculatePUJFare(edge.distance)
-              : edge.fare;
-        }
       }
 
       path.push(cameFrom[current]);
@@ -848,12 +833,13 @@ export function useRoutes() {
 
     // The path array goes from end to start, so we need to reverse it
     steps.reverse();
-    stepFares.reverse(); // Reverse to match steps order
 
-    // For PUJ routes, ensure total fare matches the step's calculated fare
-    if (steps.length === 1 && steps[0].mode === "PUJ") {
-      totalFare = steps[0].fare;
-    }
+    // Calculate total fare by summing up all step fares
+    // This ensures we don't double-count any fares
+    const totalFare = steps.reduce((sum, step) => sum + step.fare, 0);
+
+    // Extract step fares into a separate array if needed
+    const stepFares = steps.map((step) => step.fare);
 
     // Determine route type based on number of steps
     let routeType;
@@ -869,7 +855,7 @@ export function useRoutes() {
     return {
       type: routeType,
       steps: steps,
-      stepFares: stepFares, // Add the fare breakdown
+      stepFares: stepFares,
       totalDistance: totalDistance,
       totalFare: totalFare,
       transferDistances: transferDistances,
