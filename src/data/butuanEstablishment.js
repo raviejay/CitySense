@@ -5,7 +5,7 @@ export const butuanEstablishments = [
   },
   {
     name: "Robinsons Place Butuan",
-    coords: "8.9475, 125.5406",
+    coords: "8.943031, 125.519754",
   },
   {
     name: "Butuan City Hall",
