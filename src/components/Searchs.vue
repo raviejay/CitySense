@@ -580,6 +580,59 @@ onMounted(async () => {
     }
   }
 });
+
+// Add these new refs for drag functionality
+const startY = ref(0);
+const startHeight = ref(0);
+const isDragging = ref(false);
+
+const onTouchStart = (e) => {
+  isDragging.value = true;
+  startY.value = e.touches ? e.touches[0].clientY : e.clientY;
+  startHeight.value = expanded.value ? window.innerHeight * 0.7 : 200;
+  e.preventDefault();
+};
+
+const onTouchMove = (e) => {
+  if (!isDragging.value) return;
+
+  const y = e.touches ? e.touches[0].clientY : e.clientY;
+  const deltaY = startY.value - y;
+  const newHeight = startHeight.value + deltaY;
+
+  // Calculate screen percentages
+  const screenHeight = window.innerHeight;
+  const expandedThreshold = screenHeight * 0.6; // 60% of screen
+  const collapsedThreshold = screenHeight * 0.3; // 30% of screen
+
+  // Update expansion state based on drag position
+  if (newHeight > expandedThreshold) {
+    expanded.value = true;
+  } else if (newHeight < collapsedThreshold) {
+    expanded.value = false;
+  }
+
+  e.preventDefault();
+};
+
+const onTouchEnd = () => {
+  isDragging.value = false;
+};
+
+// Make sure to clean up event listeners
+onMounted(() => {
+  window.addEventListener("mouseup", onTouchEnd);
+  window.addEventListener("touchend", onTouchEnd);
+  window.addEventListener("mousemove", onTouchMove);
+  window.addEventListener("touchmove", onTouchMove, { passive: false });
+});
+
+onBeforeUnmount(() => {
+  window.removeEventListener("mouseup", onTouchEnd);
+  window.removeEventListener("touchend", onTouchEnd);
+  window.removeEventListener("mousemove", onTouchMove);
+  window.removeEventListener("touchmove", onTouchMove);
+});
 </script>
 
 <template>
@@ -590,7 +643,13 @@ onMounted(async () => {
     rounded="t-lg"
     elevation="10"
   >
-    <div class="drag-handle" @click="toggleExpanded">
+    <!-- Updated drag handle with both mouse and touch events -->
+    <div
+      class="drag-handle"
+      @mousedown="onTouchStart"
+      @touchstart="onTouchStart"
+      @click.stop="toggleExpanded"
+    >
       <div class="handle-bar"></div>
     </div>
 
@@ -1186,24 +1245,45 @@ onMounted(async () => {
   max-height: 70vh !important;
 }
 
+/* Add these styles to improve drag handle appearance and behavior */
 .drag-handle {
   width: 100%;
-  height: 24px;
+  height: 32px; /* Slightly taller for better touch target */
   display: flex;
   justify-content: center;
   align-items: center;
-  cursor: pointer;
+  cursor: ns-resize; /* Shows vertical resize cursor */
+  touch-action: none; /* Prevents browser touch handling */
   position: sticky;
   top: 0;
   z-index: 10;
   background-color: #f5f7fa;
+  padding: 4px 0;
+  -webkit-tap-highlight-color: transparent; /* Removes mobile tap highlight */
 }
 
 .handle-bar {
   width: 40px;
   height: 4px;
-  background-color: #e0e0e0;
+  background-color: #c0c0c0;
   border-radius: 4px;
+  transition: background-color 0.2s;
+}
+
+.drag-handle:active .handle-bar,
+.drag-handle:focus .handle-bar {
+  background-color: #00b4d8; /* Highlight color when dragging */
+}
+
+/* Add smooth transitions */
+.route-search-panel {
+  transition: max-height 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+/* Prevent content selection while dragging */
+.route-search-panel.dragging {
+  user-select: none;
+  -webkit-user-select: none;
 }
 
 .location-inputs {
